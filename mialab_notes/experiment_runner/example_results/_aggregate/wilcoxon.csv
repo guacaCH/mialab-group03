@@ -1,0 +1,11 @@
+experiment,baseline,postprocessed,label,metric,n_subjects,median_diff,mean_diff,p_value,better,significant_0.05
+no_gradient,baseline,False,Amygdala,DICE,3,-0.007347120251987194,-0.005272540913707602,0.5,False,False
+no_gradient,baseline,False,Amygdala,HDRFDST95,3,-0.24345897214720935,-0.28275616265929315,0.25,True,False
+no_gradient,baseline,False,GreyMatter,DICE,3,0.007642452242726527,0.0078135320710081,0.25,True,False
+no_gradient,baseline,False,GreyMatter,HDRFDST95,3,1.0411356076747005,1.2646530430590193,0.25,False,False
+no_gradient,baseline,False,Hippocampus,DICE,3,0.0064413241245125374,0.006492488133618209,0.25,True,False
+no_gradient,baseline,False,Hippocampus,HDRFDST95,3,1.298074004672051,1.2719343197309794,0.25,False,False
+no_gradient,baseline,False,Thalamus,DICE,3,0.007164000305736051,0.0060953202163120945,0.25,True,False
+no_gradient,baseline,False,Thalamus,HDRFDST95,3,-1.7153476734210757,-1.9025191652289815,0.25,True,False
+no_gradient,baseline,False,WhiteMatter,DICE,3,0.0041272604667723645,0.004152590047505456,0.25,True,False
+no_gradient,baseline,False,WhiteMatter,HDRFDST95,3,-0.7752551286084111,-0.801537407822169,0.25,True,False

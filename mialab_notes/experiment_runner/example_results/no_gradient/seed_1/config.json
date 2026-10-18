@@ -1,0 +1,63 @@
+{
+  "experiment": "no_gradient",
+  "seed": 1,
+  "config_file": "experiments/no_gradient.json",
+  "config": {
+    "description": "Baseline without the T1 gradient feature",
+    "pre_process": {
+      "skullstrip_pre": true,
+      "normalization_pre": true,
+      "registration_pre": true,
+      "coordinates_feature": true,
+      "intensity_feature": true,
+      "gradient_intensity_feature": false
+    },
+    "forest": {
+      "n_estimators": 50,
+      "max_depth": 20,
+      "max_features": "sqrt",
+      "class_weight": null,
+      "n_jobs": -1
+    },
+    "post_process": {
+      "simple_post": true
+    },
+    "save_segmentations": false
+  },
+  "feature_names": [
+    "ATLAS_COORD_0",
+    "ATLAS_COORD_1",
+    "ATLAS_COORD_2",
+    "T1w_INTENSITY"
+  ],
+  "n_features": 4,
+  "n_train_subjects": 2,
+  "n_train_voxels": 13195,
+  "train_voxels_per_label": {
+    "Background": 4583,
+    "WhiteMatter": 3864,
+    "GreyMatter": 3145,
+    "Hippocampus": 644,
+    "Amygdala": 254,
+    "Thalamus": 705
+  },
+  "n_test_subjects": 3,
+  "test_subjects": [
+    "117122",
+    "118528",
+    "118730"
+  ],
+  "git": {
+    "commit": null,
+    "branch": null,
+    "uncommitted_changes": null
+  },
+  "versions": {
+    "python": "3.9.25",
+    "numpy": "1.26.4",
+    "sklearn": "1.5.2",
+    "SimpleITK": "2.1.1.2"
+  },
+  "machine": "vm",
+  "finished_at": "2026-10-17T17:59:59"
+}

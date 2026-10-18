@@ -12,9 +12,9 @@ Owner tags are a suggestion for an equal split (equal workload is required to pa
 
 ## Phase 0: Admin (by Sun 18.10, 23:59)
 
-- [x] **0.1 [all] Fork and clone.** One person forks `github.com/ubern-mialab/MIALab`; the others clone that fork. Add the original as upstream: `git remote add upstream https://github.com/ubern-mialab/MIALab.git`. Use personal branches, merge into `main` when something works.
-- [x] **0.2 [all] Keep data out of git.** Add `MIALab_2020_Dataset/`, `mia-result/` and any feature cache folder to `.gitignore`. *Why:* the slides say "DO NOT COMMIT DATA" and the images are ~650 MB.
-- [x] **0.3 [all] Post on Slack:** member names, fork link, hypothesis 6 (official wording: "A larger amount of features improves the segmentation performance").
+- [ ] **0.1 [all] Fork and clone.** One person forks `github.com/ubern-mialab/MIALab`; the others clone that fork. Add the original as upstream: `git remote add upstream https://github.com/ubern-mialab/MIALab.git`. Use personal branches, merge into `main` when something works.
+- [ ] **0.2 [all] Keep data out of git.** Add `MIALab_2020_Dataset/`, `mia-result/` and any feature cache folder to `.gitignore`. *Why:* the slides say "DO NOT COMMIT DATA" and the images are ~650 MB.
+- [ ] **0.3 [all] Post on Slack:** member names, fork link, hypothesis 6 (official wording: "A larger amount of features improves the segmentation performance").
 - [ ] **0.4 [all] Shared environment.** Same Python version (3.10 or 3.11 is safe), install `requirements.txt` plus `pyradiomics`, `shap`, `boruta`, `scipy`, `pandas`, `seaborn`. Run `test/test_install.py`.
   - *Done when:* everyone can run `python pipeline.py` to the end and gets `mia-result/<date>/results.csv`.
 

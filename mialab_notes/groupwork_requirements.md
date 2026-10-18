@@ -59,7 +59,7 @@ Group 8 tested "spatial regularization (post-processing) improves segmentation".
 4. A nuanced conclusion: the hypothesis holds, but the effect is scale-dependent (big gains on small subcortical structures, plateau/trade-off on GM/WM).
 5. An appendix with all hyperparameters (reproducibility).
 
-## Lecturer expectation (overheard 14.10, relayed by Marc O.)
+## Lecturer expectation (overheard 14.10, relayed by Marc)
 This matches the official guiding questions above ("What are the crucial features? Is there a reason or even clinical explanation?").
 A plain benchmark of feature sets is **not** enough. The lecturers expect us to look into **why** certain features have a stronger impact on the segmentation metrics and **what influences the information they carry**. Suggested tools: **PyRadiomics, SHAP, Boruta, perturbations**.
 
