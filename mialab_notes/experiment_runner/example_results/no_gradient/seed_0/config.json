@@ -8,12 +8,13 @@
       "skullstrip_pre": true,
       "normalization_pre": true,
       "registration_pre": true,
-      "coordinates_feature": true,
-      "intensity_feature": true,
-      "gradient_intensity_feature": false
+      "features": "baseline",
+      "exclude_features": [
+        "family=gradient"
+      ]
     },
     "forest": {
-      "n_estimators": 50,
+      "n_estimators": 10,
       "max_depth": 20,
       "max_features": "sqrt",
       "class_weight": null,
@@ -25,10 +26,10 @@
     "save_segmentations": false
   },
   "feature_names": [
-    "ATLAS_COORD_0",
-    "ATLAS_COORD_1",
-    "ATLAS_COORD_2",
-    "T1w_INTENSITY"
+    "spatial_coord_x",
+    "spatial_coord_y",
+    "spatial_coord_z",
+    "T1_intensity"
   ],
   "n_features": 4,
   "n_train_subjects": 2,
@@ -48,9 +49,9 @@
     "118730"
   ],
   "git": {
-    "commit": null,
-    "branch": null,
-    "uncommitted_changes": null
+    "commit": "3c34e03f27524d5a230ccdadcac1ef7df7b0dbe0",
+    "branch": "master",
+    "uncommitted_changes": true
   },
   "versions": {
     "python": "3.9.25",
@@ -59,5 +60,5 @@
     "SimpleITK": "2.1.1.2"
   },
   "machine": "vm",
-  "finished_at": "2026-10-17T17:59:58"
+  "finished_at": "2026-10-20T18:09:26"
 }

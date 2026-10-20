@@ -1,6 +1,6 @@
 {
   "description": "Baseline without the T1 gradient feature",
-  "pre_process": {"gradient_intensity_feature": false},
+  "pre_process": {"features": "baseline", "exclude_features": ["family=gradient"]},
   "forest": {"n_estimators": 50, "max_depth": 20},
   "post_process": {"simple_post": true}
 }

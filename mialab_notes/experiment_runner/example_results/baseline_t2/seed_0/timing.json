@@ -1,0 +1,6 @@
+{
+  "preprocess_train_s": 39.93,
+  "fit_s": 0.1,
+  "predict_s": 22.84,
+  "preprocess_test_s": 33.31
+}

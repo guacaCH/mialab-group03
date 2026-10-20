@@ -7,6 +7,7 @@ Every run writes to results/<experiment>/seed_<seed>/ (see notes in experiment_r
     config.json              everything needed to reproduce the run
     metrics.csv              one row per subject x label x metric (tidy format)
     summary.csv              mean / std / median / min / max over the test subjects
+    features.csv             name, family, modality and scale of every feature column
     feature_importance.csv   random forest (Gini) importance per feature
     timing.json              run times of the pipeline steps
     segmentations/           only if "save_segmentations": true (not committed to git)
@@ -30,6 +31,7 @@ import pymia.data.conversion as conversion
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mialab.data.structure as structure  # noqa: E402
+import mialab.filtering.feature_pool as fpool  # noqa: E402
 import mialab.utilities.file_access_utilities as futil  # noqa: E402
 import mialab.utilities.pipeline_utilities as putil  # noqa: E402
 
@@ -45,13 +47,13 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_CONFIG = {
     'description': '',
-    # passed unchanged to putil.pre_process(), so any new feature flag added there works here too
+    # passed unchanged to putil.pre_process()
     'pre_process': {'skullstrip_pre': True,
                     'normalization_pre': True,
                     'registration_pre': True,
-                    'coordinates_feature': True,
-                    'intensity_feature': True,
-                    'gradient_intensity_feature': True},
+                    # feature specification, see mialab/filtering/feature_pool.py
+                    'features': 'baseline',
+                    'exclude_features': []},
     # passed unchanged to sklearn's RandomForestClassifier (random_state is set from the seed)
     'forest': {'n_estimators': 50,
                'max_depth': 20,
@@ -64,31 +66,13 @@ DEFAULT_CONFIG = {
 }
 
 
-# --- feature names -------------------------------------------------------------------------------------------------
-# The pipeline turns the feature images into a plain matrix and then deletes them, so the column names are lost.
-# This wrapper records them (one name per column; vector images such as the 3 atlas coordinates get _0, _1, _2)
-# just before the matrix is built. It works for every feature that is added to FeatureExtractor.feature_images.
-_original_generate_feature_matrix = putil.FeatureExtractor._generate_feature_matrix
-
-
-def _generate_feature_matrix_with_names(self):
-    names = []
-    for key, image in self.img.feature_images.items():
-        base = getattr(key, 'name', str(key))
-        n = image.GetNumberOfComponentsPerPixel()
-        names += [base] if n == 1 else [f'{base}_{i}' for i in range(n)]
-    self.img.feature_names = names
-    _original_generate_feature_matrix(self)
-
-
-putil.FeatureExtractor._generate_feature_matrix = _generate_feature_matrix_with_names
-
-
 # --- helpers -------------------------------------------------------------------------------------------------------
 def load_config(path: str) -> dict:
     with open(path) as f:
         user = json.load(f)
     config = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+    if any(flag in user.get('pre_process', {}) for flag in fpool.LEGACY_FLAGS):
+        del config['pre_process']['features']  # an old-style config: its boolean flags select the features
     for key, value in user.items():
         if isinstance(value, dict) and isinstance(config.get(key), dict):
             config[key].update(value)
@@ -126,9 +110,14 @@ def summarize(metrics: pd.DataFrame) -> pd.DataFrame:
 
 # --- main ----------------------------------------------------------------------------------------------------------
 def main(config_path: str, seeds: list, results_root: str, data_atlas_dir: str, data_train_dir: str,
-         data_test_dir: str, overwrite: bool):
+         data_test_dir: str, overwrite: bool, feature_cache_dir: str):
     experiment = os.path.splitext(os.path.basename(config_path))[0]
     config = load_config(config_path)
+    # fail before the slow part if the feature specification is invalid
+    columns = fpool.select_columns(*fpool.feature_spec_from_kwargs(config['pre_process']))
+    print(f'{len(columns)} features:', ', '.join(c['name'] for c in columns))
+    # the cache location depends on the machine, so it is not part of the config
+    pre_process_params = dict(config['pre_process'], feature_cache_dir=feature_cache_dir)
 
     run_dirs = {s: os.path.join(results_root, experiment, f'seed_{s}') for s in seeds}
     todo = [s for s in seeds if overwrite or not os.path.exists(os.path.join(run_dirs[s], 'metrics.csv'))]
@@ -150,12 +139,13 @@ def main(config_path: str, seeds: list, results_root: str, data_atlas_dir: str, 
         t0 = timeit.default_timer()
         # pre_process consumes the path dicts, so give it copies
         images = putil.pre_process_batch({k: dict(v) for k, v in train_data.items()},
-                                         dict(config['pre_process'], training=True), multi_process=False)
+                                         dict(pre_process_params, training=True), multi_process=False)
         t_pre = timeit.default_timer() - t0
 
         x_train = np.concatenate([img.feature_matrix[0] for img in images])
         y_train = np.concatenate([img.feature_matrix[1] for img in images]).squeeze()
         feature_names = images[0].feature_names
+        assert all(img.feature_names == feature_names for img in images), 'subjects have different features'
         del images
 
         forest = sk_ensemble.RandomForestClassifier(random_state=seed, **config['forest'])
@@ -187,7 +177,7 @@ def main(config_path: str, seeds: list, results_root: str, data_atlas_dir: str, 
     for subject, paths in test_data.items():
         print('-' * 5, f'Experiment {experiment}: testing {subject}')
         t0 = timeit.default_timer()
-        img = putil.pre_process(subject, dict(paths), **dict(config['pre_process'], training=False))
+        img = putil.pre_process(subject, dict(paths), **dict(pre_process_params, training=False))
         t_pre = timeit.default_timer() - t0
         ground_truth = img.images[structure.BrainImageTypes.GroundTruth]
 
@@ -231,6 +221,12 @@ def main(config_path: str, seeds: list, results_root: str, data_atlas_dir: str, 
             .sort_values('importance', ascending=False) \
             .to_csv(os.path.join(out, 'feature_importance.csv'), index=False)
 
+        # name and tags (family, modality, scale) of every feature column, in matrix order
+        tags = {c['name']: c for c in fpool.all_columns()}
+        pd.DataFrame([{k: tags[n][k] for k in ('name', 'feature', 'family', 'modality', 'scale')}
+                      for n in info[seed]['feature_names']]) \
+            .to_csv(os.path.join(out, 'features.csv'), index=False)
+
         with open(os.path.join(out, 'timing.json'), 'w') as f:
             json.dump({k: round(v, 2) for k, v in info[seed]['timing'].items()}, f, indent=2)
 
@@ -263,6 +259,8 @@ if __name__ == '__main__':
     parser.add_argument('--data_train_dir', default=os.path.join(SCRIPT_DIR, 'MIALab_2020_Dataset', 'train'))
     parser.add_argument('--data_test_dir', default=os.path.join(SCRIPT_DIR, 'MIALab_2020_Dataset', 'test'))
     parser.add_argument('--overwrite', action='store_true', help='redo seeds that already have results')
+    parser.add_argument('--feature_cache', default=os.path.join(SCRIPT_DIR, 'feature_cache'),
+                        help='directory of the feature cache, "none" to disable it')
     args = parser.parse_args()
     main(args.config, args.seeds, args.results_dir, args.data_atlas_dir, args.data_train_dir, args.data_test_dir,
-         args.overwrite)
+         args.overwrite, None if args.feature_cache.lower() == 'none' else args.feature_cache)

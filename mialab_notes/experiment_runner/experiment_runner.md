@@ -6,12 +6,12 @@ Two scripts for to-do tasks 2.3 and 2.4, to copy into the repo root (next to `pi
 |---|---|
 | [run_experiment.py](run_experiment.py) | Runs one experiment (one config file) for one or more seeds, writes one result folder per seed |
 | [aggregate_results.py](aggregate_results.py) | Reads all result folders, makes the comparison table, Wilcoxon tests and boxplots |
-| [experiments/](experiments/) | Example configs: `baseline.json`, `no_gradient.json` |
+| [experiments/](experiments/) | Example configs: `baseline.json`, `no_gradient.json`, `baseline_t2.json` |
 | [example_results/](example_results/) | Real output of a small test run (see below) |
 
-Both scripts need the Phase 1 preprocessing fixes ([phase1_code.md](../phase1_code.md)) and use only packages already in our `requirements.txt` (pandas, scipy, seaborn).
+Both scripts need the Phase 1 preprocessing fixes ([phase1_code.md](../phase1_code.md)) and, since 20.10, the Phase 2 feature pool ([phase2_code.md](../phase2_code.md)). They use only packages already in our `requirements.txt` (pandas, scipy, seaborn).
 
-**Tested:** both scripts were run on a copy of the repo with the Phase 1 fixes, 2 training subjects and 3 test subjects, configs `baseline` and `no_gradient`, seeds 0 and 1. All files below were produced as described, re-running an existing seed was skipped, and the aggregation produced the tables and plots. The numbers in `example_results/` come from that tiny run (2 training subjects), so **don't interpret them**; they only show the format.
+**Tested:** both scripts were run on a copy of the repo with the Phase 1 and Phase 2 code, 2 training subjects and 3 test subjects, configs `baseline`, `no_gradient` and `baseline_t2` (seed 0, 10 trees for the test), plus seeds 0 and 1 in an earlier test that also checked that re-running an existing seed is skipped. All files below were produced as described. The numbers in `example_results/` come from that tiny run (2 training subjects), so **don't interpret them**; they only show the format.
 
 ---
 
@@ -22,7 +22,7 @@ Both scripts need the Phase 1 preprocessing fixes ([phase1_code.md](../phase1_co
 ```json
 {
   "description": "Baseline without the T1 gradient feature",
-  "pre_process": {"gradient_intensity_feature": false},
+  "pre_process": {"features": "baseline", "exclude_features": ["family=gradient"]},
   "forest": {"n_estimators": 50, "max_depth": 20},
   "post_process": {"simple_post": true}
 }
@@ -33,7 +33,7 @@ Config sections:
 | Section | What it controls | Default |
 |---|---|---|
 | `description` | free text, shows up in `config.json` | `""` |
-| `pre_process` | passed **unchanged** to `putil.pre_process()`: registration/skull stripping/normalization flags and the feature flags. When you add new feature flags to `FeatureExtractor` (task 2.1), they work here immediately. | all preprocessing on; coordinates, T1 intensity, T1 gradient |
+| `pre_process` | passed **unchanged** to `putil.pre_process()`: registration/skull stripping/normalization flags and the feature selection `features` / `exclude_features` (syntax in [phase2_code.md §2](../phase2_code.md#2-selecting-features)). Configs with the old booleans (`coordinates_feature` etc.) still work. | all preprocessing on; `"features": "baseline"` |
 | `forest` | passed unchanged to scikit-learn's `RandomForestClassifier`. `random_state` is always set from the seed. | 50 trees, depth 20, `max_features="sqrt"`, no class weights, all CPU cores |
 | `post_process` | passed to `putil.post_process()`. Empty = no post-processing. | `{}` |
 | `save_segmentations` | also save the `.mha` segmentations | `false` |
@@ -50,7 +50,9 @@ python run_experiment.py experiments/no_gradient.json --seeds 0 1 2
 python aggregate_results.py --baseline baseline --plot
 ```
 
-Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `MIALab_2020_Dataset/...` next to the script), `--overwrite`.
+Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `MIALab_2020_Dataset/...` next to the script), `--overwrite`, `--feature_cache` (default `feature_cache/`, `none` to disable; see [phase2_code.md §4](../phase2_code.md#4-the-feature-cache-22)).
+
+Before anything slow starts, the runner checks the feature selection and prints it, e.g. `4 features: spatial_coord_x, spatial_coord_y, spatial_coord_z, T1_intensity`. A typo in a feature name stops it right there.
 
 What happens inside, in order:
 1. **Training, once per seed:** set the seed → preprocess the 20 training subjects and sample training voxels → train the forest.
@@ -68,6 +70,7 @@ results/
 │   │   ├── config.json
 │   │   ├── metrics.csv
 │   │   ├── summary.csv
+│   │   ├── features.csv
 │   │   ├── feature_importance.csv
 │   │   ├── timing.json
 │   │   └── segmentations/          (only with "save_segmentations": true)
@@ -88,7 +91,7 @@ results/
 |---|---|
 | `experiment`, `seed`, `config_file` | which experiment, which repetition, which config file |
 | `config` | the **full** config after defaults were filled in, so it stays correct even if defaults change later |
-| `feature_names` | the name of every feature column, in order, e.g. `ATLAS_COORD_0..2`, `T1w_INTENSITY`, `T1w_GRADIENT_INTENSITY`. Needed later for importance, SHAP and Boruta. |
+| `feature_names` | the name of every feature column, in order, e.g. `spatial_coord_x`, `T1_intensity`, `T1_gradient_magnitude`. Needed later for importance, SHAP and Boruta. |
 | `n_features` | number of features: the x-axis of the "performance vs. number of features" plot |
 | `n_train_subjects`, `n_train_voxels`, `train_voxels_per_label` | how many training voxels of each structure were actually sampled, so you can check the sampling |
 | `n_test_subjects`, `test_subjects` | which subjects were evaluated |
@@ -118,12 +121,23 @@ False,Amygdala,DICE,0.398,0.078,0.396,0.321,0.477,3
 
 Mean, std, median, min, max over the test subjects for each structure and metric (`count` = number of subjects). Same information as the provided `results_summary.csv`, plus median/min/max, one row per combination.
 
+### `features.csv`: name and tags of every feature column
+
+```
+name,feature,family,modality,scale
+spatial_coord_x,spatial_coord,spatial,none,none
+T1_intensity,T1_intensity,intensity,T1,none
+T1_gradient_magnitude,T1_gradient_magnitude,gradient,T1,none
+```
+
+One row per column of the feature matrix, in matrix order. `feature` is the computation the column comes from (the three coordinates share `spatial_coord`). Merge it with `feature_importance.csv` (or SHAP values) on the name to sum importance per family, modality or scale.
+
 ### `feature_importance.csv`: which features the forest used
 
 ```
 feature,importance
-T1w_INTENSITY,0.578
-ATLAS_COORD_1,0.163
+T1_intensity,0.578
+spatial_coord_y,0.163
 ...
 ```
 
@@ -192,9 +206,10 @@ One box per structure and experiment, over the test subjects. The first slide-re
 
 ## 5. Git rules for results
 
-- **Commit:** `experiments/*.json` and the small files in `results/` (`config.json`, `metrics.csv`, `summary.csv`, `feature_importance.csv`, `timing.json`). They're a few KB per run, and this way everyone has all results after a `git pull`.
-- **Don't commit:** segmentations and the old pipeline output. Add to `.gitignore`:
+- **Commit:** `experiments/*.json` and the small files in `results/` (`config.json`, `metrics.csv`, `summary.csv`, `features.csv`, `feature_importance.csv`, `timing.json`). They're a few KB per run, and this way everyone has all results after a `git pull`.
+- **Don't commit:** segmentations, the feature cache and the old pipeline output. Add to `.gitignore`:
   ```
+  feature_cache/
   results/**/segmentations/
   results/**/*.tmp/
   results/_aggregate/

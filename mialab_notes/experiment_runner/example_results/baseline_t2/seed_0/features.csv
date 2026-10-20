@@ -1,0 +1,8 @@
+name,feature,family,modality,scale
+spatial_coord_x,spatial_coord,spatial,none,none
+spatial_coord_y,spatial_coord,spatial,none,none
+spatial_coord_z,spatial_coord,spatial,none,none
+T1_intensity,T1_intensity,intensity,T1,none
+T1_gradient_magnitude,T1_gradient_magnitude,gradient,T1,none
+T2_intensity,T2_intensity,intensity,T2,none
+T2_gradient_magnitude,T2_gradient_magnitude,gradient,T2,none

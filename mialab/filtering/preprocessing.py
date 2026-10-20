@@ -206,10 +206,9 @@ class SkullStripping(pymia_fltr.Filter):
         """
         mask = params.img_mask  # the brain mask
 
-        # todo: remove the skull from the image by using the brain mask
-        warnings.warn('No skull-stripping implemented. Returning unprocessed image.')
-
-        return image
+        # set all voxels outside the brain mask to 0
+        mask = sitk.Cast(mask > 0, sitk.sitkUInt8)
+        return sitk.Mask(image, mask, outsideValue=0)
 
     def __str__(self):
         """Gets a printable string representation.
@@ -254,11 +253,6 @@ class ImageRegistration(pymia_fltr.Filter):
         Returns:
             sitk.Image: The registered image.
         """
-
-        # todo: replace this filter by a registration. Registration can be costly, therefore, we provide you the
-        # transformation, which you only need to apply to the image!
-        warnings.warn('No registration implemented. Returning unregistered image')
-
         atlas = params.atlas
         transform = params.transformation
         is_ground_truth = params.is_ground_truth  # the ground truth will be handled slightly different
@@ -267,8 +261,13 @@ class ImageRegistration(pymia_fltr.Filter):
         # pymia.filtering.registration.MultiModalRegistration. Think about the type of registration, i.e.
         # do you want to register to an atlas or inter-subject? Or just ask us, we can guide you ;-)
 
-        return image
+        # apply the provided affine transformation from image to atlas space: resample the image
+        # onto the atlas grid. labels and masks use nearest-neighbour interpolation to ensure
+        # that they keep their integer values. intensity images use linear interpolation
+        interpolator = sitk.sitkNearestNeighbor if is_ground_truth else sitk.sitkLinear
+        return sitk.Resample(image, atlas, transform, interpolator, 0.0, image.GetPixelID())
 
+     
     def __str__(self):
         """Gets a printable string representation.
 
