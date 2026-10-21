@@ -1,0 +1,4 @@
+{
+  "description": "Provided features: atlas coordinates, T1 intensity, T1 gradient magnitude",
+  "forest": {"n_estimators": 50, "max_depth": 20}
+}
