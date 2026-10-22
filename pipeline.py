@@ -32,6 +32,8 @@ LOADING_KEYS = [structure.BrainImageTypes.T1w,
                 structure.BrainImageTypes.BrainMask,
                 structure.BrainImageTypes.RegistrationTransform]  # the list of data we will load
 
+SEED = 42  # seeds the training voxel sampling and the random forest
+
 
 def main(result_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_dir: str):
     """Brain tissue segmentation using decision forests.
@@ -47,6 +49,8 @@ def main(result_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_di
         - Post-processing of the segmentation
         - Evaluation of the segmentation
     """
+
+    np.random.seed(SEED)
 
     # load atlas images
     putil.load_atlas_images(data_atlas_dir)
@@ -72,10 +76,11 @@ def main(result_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_di
     data_train = np.concatenate([img.feature_matrix[0] for img in images])
     labels_train = np.concatenate([img.feature_matrix[1] for img in images]).squeeze()
 
-    warnings.warn('Random forest parameters not properly set.')
-    forest = sk_ensemble.RandomForestClassifier(max_features=images[0].feature_matrix[0].shape[1],
-                                                n_estimators=1,
-                                                max_depth=5)
+    forest = sk_ensemble.RandomForestClassifier(n_estimators=100,
+                                                max_depth=25,
+                                                max_features='sqrt',
+                                                n_jobs=-1,
+                                                random_state=SEED)
 
     start_time = timeit.default_timer()
     forest.fit(data_train, labels_train)
