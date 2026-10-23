@@ -255,9 +255,9 @@ if __name__ == '__main__':
     parser.add_argument('config', help='experiment config, e.g. experiments/baseline.json')
     parser.add_argument('--seeds', type=int, nargs='+', default=[0])
     parser.add_argument('--results_dir', default=os.path.join(SCRIPT_DIR, 'results'))
-    parser.add_argument('--data_atlas_dir', default=os.path.join(SCRIPT_DIR, 'MIALab_2020_Dataset', 'atlas'))
-    parser.add_argument('--data_train_dir', default=os.path.join(SCRIPT_DIR, 'MIALab_2020_Dataset', 'train'))
-    parser.add_argument('--data_test_dir', default=os.path.join(SCRIPT_DIR, 'MIALab_2020_Dataset', 'test'))
+    parser.add_argument('--data_atlas_dir', default=os.path.join(SCRIPT_DIR, '..', 'data', 'atlas'))
+    parser.add_argument('--data_train_dir', default=os.path.join(SCRIPT_DIR, '..', 'data', 'train'))
+    parser.add_argument('--data_test_dir', default=os.path.join(SCRIPT_DIR, '..', 'data', 'test'))
     parser.add_argument('--overwrite', action='store_true', help='redo seeds that already have results')
     parser.add_argument('--feature_cache', default=os.path.join(SCRIPT_DIR, 'feature_cache'),
                         help='directory of the feature cache, "none" to disable it')

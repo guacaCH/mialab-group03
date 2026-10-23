@@ -50,7 +50,7 @@ python run_experiment.py experiments/no_gradient.json --seeds 0 1 2
 python aggregate_results.py --baseline baseline --plot
 ```
 
-Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `MIALab_2020_Dataset/...` next to the script), `--overwrite`, `--feature_cache` (default `feature_cache/`, `none` to disable; see [phase2_code.md §4](../phase2_code.md#4-the-feature-cache-22)).
+Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `../data/...`, one level above the repo, as in the provided pipeline), `--overwrite`, `--feature_cache` (default `feature_cache/`, `none` to disable; see [phase2_code.md §4](../phase2_code.md#4-the-feature-cache-22)).
 
 Before anything slow starts, the runner checks the feature selection and prints it, e.g. `4 features: spatial_coord_x, spatial_coord_y, spatial_coord_z, T1_intensity`. A typo in a feature name stops it right there.
 
