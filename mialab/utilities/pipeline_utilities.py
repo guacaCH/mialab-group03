@@ -2,7 +2,6 @@
 import enum
 import os
 import typing as t
-import warnings
 
 import numpy as np
 import pymia.data.conversion as conversion
@@ -19,7 +18,6 @@ import mialab.utilities.multi_processor as mproc
 
 atlas_t1 = sitk.Image()
 atlas_t2 = sitk.Image()
-atlas_mask = sitk.Image()
 
 
 def load_atlas_images(directory: str):
@@ -31,10 +29,8 @@ def load_atlas_images(directory: str):
 
     global atlas_t1
     global atlas_t2
-    global atlas_mask
     atlas_t1 = sitk.ReadImage(os.path.join(directory, 'mni_icbm152_t1_tal_nlin_sym_09a.nii.gz'))
     atlas_t2 = sitk.ReadImage(os.path.join(directory, 'mni_icbm152_t2_tal_nlin_sym_09a.nii.gz'))
-    atlas_mask = sitk.ReadImage(os.path.join(directory, 'mni_icbm152_t1_tal_nlin_sym_09a_mask.nii.gz'))
 
     if not conversion.ImageProperties(atlas_t1) == conversion.ImageProperties(atlas_t2):
         raise ValueError('T1w and T2w atlas images have not the same image properties')
@@ -64,6 +60,8 @@ class FeatureExtractor:
         self.coordinates_feature = kwargs.get('coordinates_feature', False)
         self.intensity_feature = kwargs.get('intensity_feature', False)
         self.gradient_intensity_feature = kwargs.get('gradient_intensity_feature', False)
+        self.t2_intensity_feature = kwargs.get('t2_intensity_feature', False)
+        self.t2_gradient_intensity_feature = kwargs.get('t2_gradient_intensity_feature', False)
 
     def execute(self) -> structure.BrainImage:
         """Extracts features from an image.
@@ -71,9 +69,6 @@ class FeatureExtractor:
         Returns:
             structure.BrainImage: The image with extracted features.
         """
-        # todo: add T2w features
-        warnings.warn('No features from T2-weighted image extracted.')
-
         if self.coordinates_feature:
             atlas_coordinates = fltr_feat.AtlasCoordinates()
             self.img.feature_images[FeatureImageTypes.ATLAS_COORD] = \
@@ -86,6 +81,16 @@ class FeatureExtractor:
             # compute gradient magnitude images
             self.img.feature_images[FeatureImageTypes.T1w_GRADIENT_INTENSITY] = \
                 sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T1w])
+
+        if self.t2_intensity_feature:
+            self.img.feature_images[FeatureImageTypes.T2w_INTENSITY] = self.img.images[structure.BrainImageTypes.T2w]
+
+        if self.t2_gradient_intensity_feature:
+            self.img.feature_images[FeatureImageTypes.T2w_GRADIENT_INTENSITY] = \
+                sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T2w])
+
+        # to add a feature: add a flag in __init__ and an if-block like the ones above. The key in feature_images
+        # becomes the feature's name, so it can be a FeatureImageTypes entry or a string like 'T1w_GAUSS_S2'.
 
         self._generate_feature_matrix()
 
@@ -128,6 +133,15 @@ class FeatureExtractor:
         labels = self._image_as_numpy_array(self.img.images[structure.BrainImageTypes.GroundTruth], mask)
 
         self.img.feature_matrix = (data.astype(np.float32), labels.astype(np.int16))
+
+        # one name per column of the feature matrix, e.g. 'T1w_INTENSITY' (the key of feature_images, which can be
+        # a FeatureImageTypes entry or a plain string). Images with several components (the 3 atlas coordinates)
+        # get '_0', '_1', '_2'.
+        self.img.feature_names = []
+        for id_, image in self.img.feature_images.items():
+            name = id_.name if isinstance(id_, enum.Enum) else str(id_)
+            n = image.GetNumberOfComponentsPerPixel()
+            self.img.feature_names += [name] if n == 1 else [f'{name}_{i}' for i in range(n)]
 
     @staticmethod
     def _image_as_numpy_array(image: sitk.Image, mask: np.ndarray = None):
@@ -201,47 +215,33 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
     img.images[structure.BrainImageTypes.BrainMask] = pipeline_brain_mask.execute(
         img.images[structure.BrainImageTypes.BrainMask])
 
-    # construct pipeline for T1w image pre-processing
-    pipeline_t1 = fltr.FilterPipeline()
-    if kwargs.get('registration_pre', False):
-        pipeline_t1.add_filter(fltr_prep.ImageRegistration())
-        pipeline_t1.set_param(fltr_prep.ImageRegistrationParameters(atlas_t1, img.transformation),
-                              len(pipeline_t1.filters) - 1)
-    if kwargs.get('skullstrip_pre', False):
-        pipeline_t1.add_filter(fltr_prep.SkullStripping())
-        pipeline_t1.set_param(fltr_prep.SkullStrippingParameters(img.images[structure.BrainImageTypes.BrainMask]),
-                              len(pipeline_t1.filters) - 1)
-    if kwargs.get('normalization_pre', False):
-        pipeline_t1.add_filter(fltr_prep.create_normalization(kwargs['normalization_pre']))
-        pipeline_t1.set_param(fltr_prep.NormalizationParameters(img.images[structure.BrainImageTypes.BrainMask],
-                                                                skull_stripped=kwargs.get('skullstrip_pre', False),
-                                                                reference=atlas_t1, reference_mask=atlas_mask),
-                            len(pipeline_t1.filters) - 1)
+    # construct pipelines for T1w and T2w image pre-processing:
+    # registration -> z-score normalization (statistics from the brain mask) -> skull stripping (optional)
+    brain_mask = img.images[structure.BrainImageTypes.BrainMask]
+    for image_type, atlas in ((structure.BrainImageTypes.T1w, atlas_t1), (structure.BrainImageTypes.T2w, atlas_t2)):
+        pipeline = fltr.FilterPipeline()
+        if kwargs.get('registration_pre', False):
+            pipeline.add_filter(fltr_prep.ImageRegistration())
+            pipeline.set_param(fltr_prep.ImageRegistrationParameters(atlas, img.transformation),
+                               len(pipeline.filters) - 1)
+        if kwargs.get('normalization_pre', False):
+            pipeline.add_filter(fltr_prep.ImageNormalization())
+            pipeline.set_param(fltr_prep.ImageNormalizationParameters(brain_mask), len(pipeline.filters) - 1)
+        if kwargs.get('skullstrip_pre', False):
+            pipeline.add_filter(fltr_prep.SkullStripping())
+            pipeline.set_param(fltr_prep.SkullStrippingParameters(brain_mask), len(pipeline.filters) - 1)
 
-    # execute pipeline on the T1w image
-    img.images[structure.BrainImageTypes.T1w] = pipeline_t1.execute(img.images[structure.BrainImageTypes.T1w])
+        # execute pipeline on the image
+        img.images[image_type] = pipeline.execute(img.images[image_type])
 
-    # construct pipeline for T2w image pre-processing
-    pipeline_t2 = fltr.FilterPipeline()
-    if kwargs.get('registration_pre', False):
-        pipeline_t2.add_filter(fltr_prep.ImageRegistration())
-        pipeline_t2.set_param(fltr_prep.ImageRegistrationParameters(atlas_t2, img.transformation),
-                              len(pipeline_t2.filters) - 1)
-    if kwargs.get('skullstrip_pre', False):
-        pipeline_t2.add_filter(fltr_prep.SkullStripping())
-        pipeline_t2.set_param(fltr_prep.SkullStrippingParameters(img.images[structure.BrainImageTypes.BrainMask]),
-                              len(pipeline_t2.filters) - 1)
-    if kwargs.get('normalization_pre', False):
-        pipeline_t2.add_filter(fltr_prep.create_normalization(kwargs['normalization_pre']))
-        pipeline_t2.set_param(fltr_prep.NormalizationParameters(img.images[structure.BrainImageTypes.BrainMask],
-                                                                        skull_stripped=kwargs.get('skullstrip_pre', False),
-                                                                        reference=atlas_t2, reference_mask=atlas_mask),
-                            len(pipeline_t2.filters) - 1)
-    
-    sitk.WriteImage(img.images[structure.BrainImageTypes.T1w], 'check_T1.nii.gz')
-
-    # execute pipeline on the T2w image
-    img.images[structure.BrainImageTypes.T2w] = pipeline_t2.execute(img.images[structure.BrainImageTypes.T2w])
+        # optional perturbation for the robustness experiment: Gaussian noise on the pre-processed image.
+        # After z-score normalization, noise_std is in units of the brain's intensity standard deviation.
+        noise_std = kwargs.get('noise_std', 0)
+        if noise_std > 0:
+            noisy = sitk.AdditiveGaussianNoise(img.images[image_type], noise_std, 0.0, 42)
+            if kwargs.get('skullstrip_pre', False):
+                noisy = sitk.Mask(noisy, sitk.Cast(brain_mask > 0, sitk.sitkUInt8))
+            img.images[image_type] = noisy
 
     # construct pipeline for ground truth image pre-processing
     pipeline_gt = fltr.FilterPipeline()

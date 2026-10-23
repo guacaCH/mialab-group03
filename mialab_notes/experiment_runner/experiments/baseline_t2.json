@@ -1,5 +1,0 @@
-{
-  "description": "Baseline plus T2 intensity and T2 gradient magnitude",
-  "pre_process": {"features": "baseline_t2"},
-  "forest": {"n_estimators": 50, "max_depth": 20}
-}

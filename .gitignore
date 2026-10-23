@@ -185,3 +185,11 @@ cython_debug/
 
 # VS Code
 .vscode
+
+# Simple Version
+features/
+*.mha
+*.nii.gz
+.ipynb_checkpoints/
+.idea/
+.DS_Store

@@ -1,29 +1,30 @@
-# Medical Image Analysis Laboratory
+# MIA Lab group 03: does a larger amount of features improve the segmentation?
 
-Welcome to the medical image analysis laboratory (MIALab).
-This repository contains all code you will need to get started with classical medical image analysis.
+Brain tissue segmentation with a random forest, based on the provided MIALab pipeline. Plan and methods: [groupwork_requirements.md](groupwork_requirements.md), [feature_methods.md](feature_methods.md), [todo.md](todo.md).
 
-During the MIALab you will work on the task of brain tissue segmentation from magnetic resonance (MR) images.
-We have set up an entire pipeline to solve this task, specifically:
+## Setup (once)
 
-- Pre-processing
-- Registration
-- Feature extraction
-- Voxel-wise tissue classification
-- Post-processing
-- Evaluation
+1. The data goes one level above this folder, as in the provided pipeline: `..\data\atlas`, `..\data\train`, `..\data\test`.
+2. Create the environment (Python 3.9):
+   ```
+   uv venv --python 3.9
+   .venv\Scripts\activate
+   uv pip install -r requirements.txt
+   ```
+3. In VS Code, select `.venv` as the interpreter and as the notebook kernel.
 
-After you complete the exercises, dive into the 
-    
-    pipeline.py 
+## Run
 
-script to learn how all of these steps work together. 
+1. `python extract_features.py`: pre-processing and features of all subjects, saved to `features/`. Run it again after adding a feature.
+2. Open `analysis.ipynb` and run it from top to bottom: all experiments and plots.
 
-During the laboratory you will get to know the entire pipeline and investigate one of these pipeline elements in-depth.
-You will get to know and to use various libraries and software tools needed in the daily life as biomedical engineer or researcher in the medical image analysis domain.
+`pipeline.py` is the original end-to-end pipeline (with post-processing), kept as a reference.
 
-Enjoy!
+## Files
 
-----
-
-Found a bug or do you have suggestions? Open an issue or better submit a pull request.
+| File | Content |
+|---|---|
+| `mialab/` | the provided pipeline code with our changes (registration, z-score normalization, skull stripping, HD95, T2 features, feature names) |
+| `extract_features.py` | computes the features once and saves them |
+| `analysis.ipynb` | experiments: forest choice, feature sets, SHAP, leave-one-group-out, noise |
+| `pipeline.py` | original pipeline (reference) |
