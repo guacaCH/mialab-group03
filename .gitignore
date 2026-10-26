@@ -185,3 +185,11 @@ cython_debug/
 
 # VS Code
 .vscode
+
+# pipeline output and caches
+feature_cache/
+mia-result/
+results/**/segmentations/
+results/**/*.tmp/
+results/_aggregate/
+*.mha

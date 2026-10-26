@@ -41,3 +41,4 @@ class BrainImage:
         self.feature_matrix = None  # a tuple (features, labels),
         # where the shape of features is (n, number_of_features) and the shape of labels is (n, 1)
         # with n being the amount of voxels
+        self.feature_names = []  # the name of each column of the feature matrix

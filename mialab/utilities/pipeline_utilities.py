@@ -17,6 +17,10 @@ import mialab.filtering.postprocessing as fltr_postp
 import mialab.filtering.preprocessing as fltr_prep
 import mialab.utilities.multi_processor as mproc
 
+import mialab.filtering.feature_extraction as fltr_feat
+import mialab.filtering.feature_pool as fpool
+import mialab.filtering.postprocessing as fltr_postp
+
 atlas_t1 = sitk.Image()
 atlas_t2 = sitk.Image()
 atlas_mask = sitk.Image()
@@ -51,19 +55,30 @@ class FeatureImageTypes(enum.Enum):
 
 
 class FeatureExtractor:
-    """Represents a feature extractor."""
+    """Represents a feature extractor.
+
+    Computes the selected columns of the feature pool (see :mod:`mialab.filtering.feature_pool`) and builds
+    the feature matrix. The column names are stored in ``img.feature_names``.
+    """
 
     def __init__(self, img: structure.BrainImage, **kwargs):
         """Initializes a new instance of the FeatureExtractor class.
 
         Args:
             img (structure.BrainImage): The image to extract features from.
+            kwargs: The pre-processing parameters. Used here:
+                ``training`` (bool): sample training voxels (True) or use all voxels (False).
+                ``features``, ``exclude_features``: the feature specification, see ``feature_pool.select_columns``.
+                ``coordinates_feature``, ``intensity_feature``, ``gradient_intensity_feature``: the old flags,
+                still accepted if ``features`` is not given.
+                ``feature_cache_dir`` (str): directory of the feature cache; None (default) disables it.
         """
         self.img = img
         self.training = kwargs.get('training', True)
-        self.coordinates_feature = kwargs.get('coordinates_feature', False)
-        self.intensity_feature = kwargs.get('intensity_feature', False)
-        self.gradient_intensity_feature = kwargs.get('gradient_intensity_feature', False)
+        spec, exclude = fpool.feature_spec_from_kwargs(kwargs)
+        self.columns = fpool.select_columns(spec, exclude)
+        cache_dir = kwargs.get('feature_cache_dir', None)
+        self.cache = fpool.FeatureCache(cache_dir, kwargs) if cache_dir else None
 
     def execute(self) -> structure.BrainImage:
         """Extracts features from an image.
@@ -71,25 +86,23 @@ class FeatureExtractor:
         Returns:
             structure.BrainImage: The image with extracted features.
         """
-        # todo: add T2w features
-        warnings.warn('No features from T2-weighted image extracted.')
-
-        if self.coordinates_feature:
-            atlas_coordinates = fltr_feat.AtlasCoordinates()
-            self.img.feature_images[FeatureImageTypes.ATLAS_COORD] = \
-                atlas_coordinates.execute(self.img.images[structure.BrainImageTypes.T1w])
-
-        if self.intensity_feature:
-            self.img.feature_images[FeatureImageTypes.T1w_INTENSITY] = self.img.images[structure.BrainImageTypes.T1w]
-
-        if self.gradient_intensity_feature:
-            # compute gradient magnitude images
-            self.img.feature_images[FeatureImageTypes.T1w_GRADIENT_INTENSITY] = \
-                sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T1w])
+        # compute every feature that has at least one selected column, in pool order
+        for name in dict.fromkeys(column['feature'] for column in self.columns):
+            self.img.feature_images[name] = self._compute(fpool.FEATURES[name])
 
         self._generate_feature_matrix()
 
         return self.img
+
+    def _compute(self, feature: fpool.Feature) -> sitk.Image:
+        """Computes a feature image, or loads it from the cache if the feature is cacheable and cached."""
+        if self.cache is None or not feature.cache:
+            return feature.compute(self.img)
+        image = self.cache.load(self.img.id_, feature)
+        if image is None:
+            image = feature.compute(self.img)
+            self.cache.save(self.img.id_, feature, image)
+        return image
 
     def _generate_feature_matrix(self):
         """Generates a feature matrix."""
@@ -119,15 +132,18 @@ class FeatureExtractor:
             mask = sitk.GetArrayFromImage(mask)
             mask = np.logical_not(mask)
 
-        # generate features
-        data = np.concatenate(
-            [self._image_as_numpy_array(image, mask) for id_, image in self.img.feature_images.items()],
-            axis=1)
+        # generate features: per feature image, keep only the selected components
+        data = []
+        for name, image in self.img.feature_images.items():
+            components = [column['component'] for column in self.columns if column['feature'] == name]
+            data.append(self._image_as_numpy_array(image, mask)[:, components])
+        data = np.concatenate(data, axis=1)
 
         # generate labels (note that we assume to have a ground truth even for testing)
         labels = self._image_as_numpy_array(self.img.images[structure.BrainImageTypes.GroundTruth], mask)
 
         self.img.feature_matrix = (data.astype(np.float32), labels.astype(np.int16))
+        self.img.feature_names = [column['name'] for column in self.columns]
 
     @staticmethod
     def _image_as_numpy_array(image: sitk.Image, mask: np.ndarray = None):

@@ -65,6 +65,37 @@ class AtlasCoordinates(fltr.Filter):
         return 'AtlasCoordinates:\n' \
             .format(self=self)
 
+class SimpleITKFunction(fltr.Filter):
+    """Wraps a SimpleITK function (e.g. ``sitk.GradientMagnitude``) as a filter, so it can be used in the feature pool.
+
+    Examples:
+        >>> SimpleITKFunction(sitk.GradientMagnitude)
+        >>> SimpleITKFunction(sitk.SmoothingRecursiveGaussian, sigma=2.0)
+    """
+
+    def __init__(self, function_, **kwargs):
+        """Initializes a new instance of the SimpleITKFunction class.
+
+        Args:
+            function_: A SimpleITK function taking an image as first argument and returning an image.
+            kwargs: Further arguments passed to the function.
+        """
+        super().__init__()
+        self.function = function_
+        self.kwargs = kwargs
+
+    def execute(self, image: sitk.Image, params: fltr.FilterParams = None) -> sitk.Image:
+        """Executes the function on an image (as float32, so integer inputs give float outputs)."""
+        return self.function(sitk.Cast(image, sitk.sitkFloat32), **self.kwargs)
+
+    def __str__(self):
+        """Gets a printable string representation.
+
+        Returns:
+            str: String representation.
+        """
+        return 'SimpleITKFunction:\n function: {self.function.__name__}\n kwargs: {self.kwargs}\n' \
+            .format(self=self)
 
 def first_order_texture_features_function(values):
     """Calculates first-order texture features.

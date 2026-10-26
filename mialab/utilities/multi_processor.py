@@ -42,6 +42,7 @@ class PicklableBrainImage:
         self.image_properties = image_properties
         self.np_feature_images = {}
         self.feature_matrix = None  # a tuple (features, labels),
+        self.feature_names = []
         # where the shape of features is (n, number_of_features) and the shape of labels is (n, 1)
         # with n being the amount of voxels
         self.pickable_transform = PicklableAffineTransform(transform)
@@ -73,6 +74,7 @@ class BrainImageToPicklableBridge:
                                                    brain_image.transformation)
         pickable_brain_image.np_feature_images = np_feature_images
         pickable_brain_image.feature_matrix = brain_image.feature_matrix
+        pickable_brain_image.feature_names = brain_image.feature_names
 
         return pickable_brain_image
 
@@ -104,6 +106,7 @@ class PicklableToBrainImageBridge:
 
         brain_image = structure.BrainImage(picklable_brain_image.id_, picklable_brain_image.path, images, transform)
         brain_image.feature_matrix = picklable_brain_image.feature_matrix
+        brain_image.feature_names = picklable_brain_image.feature_names
         return brain_image
 
 
