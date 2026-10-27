@@ -10,4 +10,11 @@ Boruta
 shap
 scipy
 pandas
+<<<<<<< Updated upstream
 seaborn
+=======
+seaborn
+shap
+boruta>=0.4.3
+ipykernel
+>>>>>>> Stashed changes

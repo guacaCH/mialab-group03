@@ -2,7 +2,11 @@
 import enum
 import os
 import typing as t
+<<<<<<< Updated upstream
 import warnings
+=======
+import zlib
+>>>>>>> Stashed changes
 
 import numpy as np
 import pymia.data.conversion as conversion
@@ -64,6 +68,19 @@ class FeatureExtractor:
         self.coordinates_feature = kwargs.get('coordinates_feature', False)
         self.intensity_feature = kwargs.get('intensity_feature', False)
         self.gradient_intensity_feature = kwargs.get('gradient_intensity_feature', False)
+<<<<<<< Updated upstream
+=======
+        self.t2_intensity_feature = kwargs.get('t2_intensity_feature', False)
+        self.t2_gradient_intensity_feature = kwargs.get('t2_gradient_intensity_feature', False)
+        # extended features (extract_features.py --extended)
+        self.multiscale_feature = kwargs.get('multiscale_feature', False)
+        self.local_statistics_feature = kwargs.get('local_statistics_feature', False)
+        self.t1_t2_difference_feature = kwargs.get('t1_t2_difference_feature', False)
+        self.random_feature = kwargs.get('random_feature', False)
+        # label prior: label_counts[i] counts how many training subjects have label i + 1 at a voxel (atlas space)
+        self.label_counts = kwargs.get('label_counts', None)
+        self.label_count_subjects = kwargs.get('label_count_subjects', 0)
+>>>>>>> Stashed changes
 
     def execute(self) -> structure.BrainImage:
         """Extracts features from an image.
@@ -87,6 +104,67 @@ class FeatureExtractor:
             self.img.feature_images[FeatureImageTypes.T1w_GRADIENT_INTENSITY] = \
                 sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T1w])
 
+<<<<<<< Updated upstream
+=======
+        if self.t2_intensity_feature:
+            self.img.feature_images[FeatureImageTypes.T2w_INTENSITY] = self.img.images[structure.BrainImageTypes.T2w]
+
+        if self.t2_gradient_intensity_feature:
+            self.img.feature_images[FeatureImageTypes.T2w_GRADIENT_INTENSITY] = \
+                sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T2w])
+
+        # to add a feature: add a flag in __init__ and an if-block like the ones above. The key in feature_images
+        # becomes the feature's name, so it can be a FeatureImageTypes entry or a string like 'T1w_GAUSS_S2'.
+
+        modalities = ((structure.BrainImageTypes.T1w, 'T1w'), (structure.BrainImageTypes.T2w, 'T2w'))
+
+        if self.multiscale_feature:
+            # Gaussian smoothing (the surroundings) and Laplacian of Gaussian (blobs and edges) at 3 scales (sigma in mm)
+            for image_type, modality in modalities:
+                image = self.img.images[image_type]
+                for sigma in (1, 2, 4):
+                    self.img.feature_images[f'{modality}_GAUSS_S{sigma}'] = \
+                        sitk.SmoothingRecursiveGaussian(image, sigma)
+                    self.img.feature_images[f'{modality}_LOG_S{sigma}'] = \
+                        sitk.LaplacianRecursiveGaussian(image, sigma)
+
+        if self.local_statistics_feature:
+            # mean and standard deviation in a 5x5x5 cube around the voxel: uniform tissue or a boundary?
+            for image_type, modality in modalities:
+                image = self.img.images[image_type]
+                self.img.feature_images[f'{modality}_LOCAL_MEAN'] = sitk.Mean(image, [2, 2, 2])
+                self.img.feature_images[f'{modality}_LOCAL_STD'] = sitk.Noise(image, [2, 2, 2])
+
+        if self.t1_t2_difference_feature:
+            # both images are z-scored, so a ratio would divide by values close to 0. The difference combines the two
+            # contrasts in the same way (WM: high T1, low T2. GM: lower T1, higher T2)
+            self.img.feature_images['T1w_MINUS_T2w'] = \
+                self.img.images[structure.BrainImageTypes.T1w] - self.img.images[structure.BrainImageTypes.T2w]
+
+        if self.label_counts is not None:
+            # probabilistic atlas: the fraction of training subjects with this label at this voxel. A training subject
+            # is left out of its own prior, otherwise the feature would contain its own label
+            counts = self.label_counts.astype(np.float32)
+            n = self.label_count_subjects
+            if self.training:
+                ground_truth = sitk.GetArrayFromImage(self.img.images[structure.BrainImageTypes.GroundTruth])
+                counts -= np.stack([ground_truth == label for label in range(1, len(counts) + 1)])
+                n -= 1
+            for name, prior in zip(('WM', 'GM', 'HIPPOCAMPUS', 'AMYGDALA', 'THALAMUS'), counts / n):
+                image = sitk.GetImageFromArray(prior)
+                image.CopyInformation(self.img.images[structure.BrainImageTypes.T1w])
+                self.img.feature_images[f'PRIOR_{name}'] = image
+
+        if self.random_feature:
+            # pure noise as a control: a real feature less important than this one is useless. A separate random
+            # generator per subject, so the training voxels sampled with np.random stay the same
+            rng = np.random.default_rng(zlib.crc32(self.img.id_.encode()))
+            shape = sitk.GetArrayFromImage(self.img.images[structure.BrainImageTypes.T1w]).shape
+            image = sitk.GetImageFromArray(rng.standard_normal(shape).astype(np.float32))
+            image.CopyInformation(self.img.images[structure.BrainImageTypes.T1w])
+            self.img.feature_images['RANDOM_NOISE'] = image
+
+>>>>>>> Stashed changes
         self._generate_feature_matrix()
 
         return self.img

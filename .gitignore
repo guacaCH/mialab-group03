@@ -185,4 +185,17 @@ cython_debug/
 .cursorindexingignore
 
 # VS Code
+<<<<<<< Updated upstream
 .vscode
+=======
+.vscode
+
+# Simple Version
+features/
+features_extended/
+*.mha
+*.nii.gz
+.ipynb_checkpoints/
+.idea/
+.DS_Store
+>>>>>>> Stashed changes
