@@ -1,0 +1,10 @@
+{
+  "description": "The 29 extended features + brain-surface distance, distance to the typical subcortical regions and hemisphere symmetry (35 features)",
+  "pre_process": {
+    "features": "extended_plus"
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

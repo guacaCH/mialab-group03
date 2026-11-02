@@ -1,0 +1,13 @@
+{
+  "description": "Extended features + a pure-noise control column (experiment 5)",
+  "pre_process": {
+    "features": [
+      "extended",
+      "control_random"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "description": "Baseline + T2 + the label prior only: how much is the prior alone? (experiment 2)",
+  "pre_process": {
+    "features": [
+      "baseline_t2",
+      "family=prior"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

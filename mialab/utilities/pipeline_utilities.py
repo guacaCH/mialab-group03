@@ -254,7 +254,6 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
                                                                         reference=atlas_t2, reference_mask=atlas_mask),
                             len(pipeline_t2.filters) - 1)
     
-    sitk.WriteImage(img.images[structure.BrainImageTypes.T1w], 'check_T1.nii.gz')
 
     # execute pipeline on the T2w image
     img.images[structure.BrainImageTypes.T2w] = pipeline_t2.execute(img.images[structure.BrainImageTypes.T2w])

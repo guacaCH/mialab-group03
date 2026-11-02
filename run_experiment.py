@@ -34,6 +34,7 @@ import pymia.data.conversion as conversion
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mialab.data.structure as structure  # noqa: E402
 import mialab.filtering.feature_pool as fpool  # noqa: E402
+import mialab.filtering.preprocessing as fltr_prep  # noqa: E402
 import mialab.utilities.file_access_utilities as futil  # noqa: E402
 import mialab.utilities.pipeline_utilities as putil  # noqa: E402
 
@@ -103,6 +104,18 @@ def crawl(data_dir: str) -> dict:
     return futil.FileSystemDataCrawler(data_dir, LOADING_KEYS, futil.BrainImageFilePathGenerator(),
                                        futil.DataDirectoryFilter()).data
 
+def registered_ground_truths(data: dict) -> dict:
+    """Loads the ground truth of every subject and registers it to the atlas (as pre_process does).
+    Needed for the label prior, which counts the labels of the training subjects in atlas space.
+    putil.load_atlas_images() must have been called before.
+    """
+    ground_truths = {}
+    for subject, paths in data.items():
+        transform = sitk.ReadTransform(paths[structure.BrainImageTypes.RegistrationTransform])
+        ground_truth = sitk.ReadImage(paths[structure.BrainImageTypes.GroundTruth])
+        ground_truths[subject] = fltr_prep.ImageRegistration().execute(
+            ground_truth, fltr_prep.ImageRegistrationParameters(putil.atlas_t1, transform, True))
+    return ground_truths
 
 def write_slicer_segmentation(label_image: sitk.Image, path: str):
     """Writes a label image as a 3D Slicer segmentation (.seg.nrrd): one named, coloured segment per label.
@@ -158,6 +171,12 @@ def main(config_path: str, seeds: list, results_root: str, data_atlas_dir: str, 
     putil.load_atlas_images(data_atlas_dir)
     train_data = crawl(data_train_dir)
     test_data = crawl(data_test_dir)
+
+    # the label prior is built from the training subjects only (never from the test subjects)
+    if any(column['family'] in fpool.PRIOR_FAMILIES for column in columns):
+        print('building the label prior from', len(train_data), 'training subjects')
+        fpool.LABEL_PRIOR.clear()
+        fpool.LABEL_PRIOR.update(fpool.build_label_prior(registered_ground_truths(train_data)))
 
     # 1) training: one forest per seed. The seed fixes the random voxel sampling and the forest.
     forests, info = {}, {}

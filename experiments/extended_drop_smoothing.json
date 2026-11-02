@@ -1,0 +1,13 @@
+{
+  "description": "Extended features without the smoothing family (drop-one-family ablation, experiment 4)",
+  "pre_process": {
+    "features": "extended",
+    "exclude_features": [
+      "family=smoothing"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}
