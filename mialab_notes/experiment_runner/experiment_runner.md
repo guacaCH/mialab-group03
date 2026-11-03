@@ -36,9 +36,11 @@ Config sections:
 | `pre_process` | passed **unchanged** to `putil.pre_process()`: registration/skull stripping/normalization flags and the feature selection `features` / `exclude_features` (syntax in [phase2_code.md §2](../phase2_code.md#2-selecting-features)). Configs with the old booleans (`coordinates_feature` etc.) still work. | all preprocessing on; `"features": "baseline"` |
 | `forest` | passed unchanged to scikit-learn's `RandomForestClassifier`. `random_state` is always set from the seed. | 50 trees, depth 20, `max_features="sqrt"`, no class weights, all CPU cores |
 | `post_process` | passed to `putil.post_process()`. Empty = no post-processing. | `{}` |
-| `save_segmentations` | also save the `.mha` segmentations | `false` |
+| `save_segmentations` | also save the predicted segmentations: `true` writes `.mha`, `"slicer"` writes `.seg.nrrd` for 3D Slicer (see below) plus the ground truth | `false` |
 
 Freeze the forest settings in `baseline.json` once task 1.7 is done, and copy the same `forest` block into every feature experiment.
+
+**Viewing segmentations in 3D Slicer.** With `"save_segmentations": "slicer"`, every prediction is written as `<subject>_SEG.seg.nrrd` (and `_SEG-PP` with post-processing), and the ground truth once per experiment as `ground_truth/<subject>_GT.seg.nrrd`. Drag a file into Slicer and it opens as a segmentation with five named segments (WhiteMatter, GreyMatter, Hippocampus, Amygdala, Thalamus) in the same colours every time. The segmentations are in atlas space (after registration), so load the atlas T1 (`../data/atlas/mni_icbm152_t1_tal_nlin_sym_09a.nii.gz`) as the background image, not the subject's original T1. Each file is about 0.4 MB.
 
 **One seed = one repetition.** The seed fixes (a) the random choice of training voxels and (b) the randomness inside the forest. Running seeds 0, 1, 2 tells you how much results change by chance alone. If a feature set beats the baseline by less than that, it's noise.
 
@@ -50,7 +52,7 @@ python run_experiment.py experiments/no_gradient.json --seeds 0 1 2
 python aggregate_results.py --baseline baseline --plot
 ```
 
-Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `MIALab_2020_Dataset/...` next to the script), `--overwrite`, `--feature_cache` (default `feature_cache/`, `none` to disable; see [phase2_code.md §4](../phase2_code.md#4-the-feature-cache-22)).
+Options of `run_experiment.py`: `--results_dir` (default `results/`), `--data_atlas_dir`, `--data_train_dir`, `--data_test_dir` (default `../data/...`, one level above the repo, as in the provided pipeline), `--overwrite`, `--feature_cache` (default `feature_cache/`, `none` to disable; see [phase2_code.md §4](../phase2_code.md#4-the-feature-cache-22)).
 
 Before anything slow starts, the runner checks the feature selection and prints it, e.g. `4 features: spatial_coord_x, spatial_coord_y, spatial_coord_z, T1_intensity`. A typo in a feature name stops it right there.
 
@@ -73,8 +75,9 @@ results/
 │   │   ├── features.csv
 │   │   ├── feature_importance.csv
 │   │   ├── timing.json
-│   │   └── segmentations/          (only with "save_segmentations": true)
-│   └── seed_1/ ...
+│   │   └── segmentations/          (only with "save_segmentations": true or "slicer")
+│   ├── seed_1/ ...
+│   └── ground_truth/               (only with "save_segmentations": "slicer")
 ├── no_gradient/
 │   └── ...
 └── _aggregate/                     (written by aggregate_results.py)

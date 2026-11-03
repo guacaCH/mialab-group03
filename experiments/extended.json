@@ -1,0 +1,10 @@
+{
+  "description": "The 29 extended features of Alejandro's notebook (experiment 1)",
+  "pre_process": {
+    "features": "extended"
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

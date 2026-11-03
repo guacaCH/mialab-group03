@@ -2,11 +2,7 @@
 import enum
 import os
 import typing as t
-<<<<<<< Updated upstream
 import warnings
-=======
-import zlib
->>>>>>> Stashed changes
 
 import numpy as np
 import pymia.data.conversion as conversion
@@ -20,6 +16,10 @@ import mialab.filtering.feature_extraction as fltr_feat
 import mialab.filtering.postprocessing as fltr_postp
 import mialab.filtering.preprocessing as fltr_prep
 import mialab.utilities.multi_processor as mproc
+
+import mialab.filtering.feature_extraction as fltr_feat
+import mialab.filtering.feature_pool as fpool
+import mialab.filtering.postprocessing as fltr_postp
 
 atlas_t1 = sitk.Image()
 atlas_t2 = sitk.Image()
@@ -55,32 +55,32 @@ class FeatureImageTypes(enum.Enum):
 
 
 class FeatureExtractor:
-    """Represents a feature extractor."""
+    """Represents a feature extractor.
+
+    Computes the selected columns of the feature pool (see :mod:`mialab.filtering.feature_pool`) and builds
+    the feature matrix. The column names are stored in ``img.feature_names``.
+    """
 
     def __init__(self, img: structure.BrainImage, **kwargs):
         """Initializes a new instance of the FeatureExtractor class.
 
         Args:
             img (structure.BrainImage): The image to extract features from.
+            kwargs: The pre-processing parameters. Used here:
+                ``training`` (bool): sample training voxels (True) or use all voxels (False).
+                ``features``, ``exclude_features``: the feature specification, see ``feature_pool.select_columns``.
+                ``coordinates_feature``, ``intensity_feature``, ``gradient_intensity_feature``: the old flags,
+                still accepted if ``features`` is not given.
+                ``feature_cache_dir`` (str): directory of the feature cache; None (default) disables it.
         """
         self.img = img
         self.training = kwargs.get('training', True)
-        self.coordinates_feature = kwargs.get('coordinates_feature', False)
-        self.intensity_feature = kwargs.get('intensity_feature', False)
-        self.gradient_intensity_feature = kwargs.get('gradient_intensity_feature', False)
-<<<<<<< Updated upstream
-=======
-        self.t2_intensity_feature = kwargs.get('t2_intensity_feature', False)
-        self.t2_gradient_intensity_feature = kwargs.get('t2_gradient_intensity_feature', False)
-        # extended features (extract_features.py --extended)
-        self.multiscale_feature = kwargs.get('multiscale_feature', False)
-        self.local_statistics_feature = kwargs.get('local_statistics_feature', False)
-        self.t1_t2_difference_feature = kwargs.get('t1_t2_difference_feature', False)
-        self.random_feature = kwargs.get('random_feature', False)
-        # label prior: label_counts[i] counts how many training subjects have label i + 1 at a voxel (atlas space)
-        self.label_counts = kwargs.get('label_counts', None)
-        self.label_count_subjects = kwargs.get('label_count_subjects', 0)
->>>>>>> Stashed changes
+        spec, exclude = fpool.feature_spec_from_kwargs(kwargs)
+        self.columns = fpool.select_columns(spec, exclude)
+        cache_dir = kwargs.get('feature_cache_dir', None)
+        # no cache for noisy images: the cache does not know the noise level
+        use_cache = cache_dir and not kwargs.get('noise_std', 0)
+        self.cache = fpool.FeatureCache(cache_dir, kwargs) if use_cache else None
 
     def execute(self) -> structure.BrainImage:
         """Extracts features from an image.
@@ -88,86 +88,23 @@ class FeatureExtractor:
         Returns:
             structure.BrainImage: The image with extracted features.
         """
-        # todo: add T2w features
-        warnings.warn('No features from T2-weighted image extracted.')
+        # compute every feature that has at least one selected column, in pool order
+        for name in dict.fromkeys(column['feature'] for column in self.columns):
+            self.img.feature_images[name] = self._compute(fpool.FEATURES[name])
 
-        if self.coordinates_feature:
-            atlas_coordinates = fltr_feat.AtlasCoordinates()
-            self.img.feature_images[FeatureImageTypes.ATLAS_COORD] = \
-                atlas_coordinates.execute(self.img.images[structure.BrainImageTypes.T1w])
-
-        if self.intensity_feature:
-            self.img.feature_images[FeatureImageTypes.T1w_INTENSITY] = self.img.images[structure.BrainImageTypes.T1w]
-
-        if self.gradient_intensity_feature:
-            # compute gradient magnitude images
-            self.img.feature_images[FeatureImageTypes.T1w_GRADIENT_INTENSITY] = \
-                sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T1w])
-
-<<<<<<< Updated upstream
-=======
-        if self.t2_intensity_feature:
-            self.img.feature_images[FeatureImageTypes.T2w_INTENSITY] = self.img.images[structure.BrainImageTypes.T2w]
-
-        if self.t2_gradient_intensity_feature:
-            self.img.feature_images[FeatureImageTypes.T2w_GRADIENT_INTENSITY] = \
-                sitk.GradientMagnitude(self.img.images[structure.BrainImageTypes.T2w])
-
-        # to add a feature: add a flag in __init__ and an if-block like the ones above. The key in feature_images
-        # becomes the feature's name, so it can be a FeatureImageTypes entry or a string like 'T1w_GAUSS_S2'.
-
-        modalities = ((structure.BrainImageTypes.T1w, 'T1w'), (structure.BrainImageTypes.T2w, 'T2w'))
-
-        if self.multiscale_feature:
-            # Gaussian smoothing (the surroundings) and Laplacian of Gaussian (blobs and edges) at 3 scales (sigma in mm)
-            for image_type, modality in modalities:
-                image = self.img.images[image_type]
-                for sigma in (1, 2, 4):
-                    self.img.feature_images[f'{modality}_GAUSS_S{sigma}'] = \
-                        sitk.SmoothingRecursiveGaussian(image, sigma)
-                    self.img.feature_images[f'{modality}_LOG_S{sigma}'] = \
-                        sitk.LaplacianRecursiveGaussian(image, sigma)
-
-        if self.local_statistics_feature:
-            # mean and standard deviation in a 5x5x5 cube around the voxel: uniform tissue or a boundary?
-            for image_type, modality in modalities:
-                image = self.img.images[image_type]
-                self.img.feature_images[f'{modality}_LOCAL_MEAN'] = sitk.Mean(image, [2, 2, 2])
-                self.img.feature_images[f'{modality}_LOCAL_STD'] = sitk.Noise(image, [2, 2, 2])
-
-        if self.t1_t2_difference_feature:
-            # both images are z-scored, so a ratio would divide by values close to 0. The difference combines the two
-            # contrasts in the same way (WM: high T1, low T2. GM: lower T1, higher T2)
-            self.img.feature_images['T1w_MINUS_T2w'] = \
-                self.img.images[structure.BrainImageTypes.T1w] - self.img.images[structure.BrainImageTypes.T2w]
-
-        if self.label_counts is not None:
-            # probabilistic atlas: the fraction of training subjects with this label at this voxel. A training subject
-            # is left out of its own prior, otherwise the feature would contain its own label
-            counts = self.label_counts.astype(np.float32)
-            n = self.label_count_subjects
-            if self.training:
-                ground_truth = sitk.GetArrayFromImage(self.img.images[structure.BrainImageTypes.GroundTruth])
-                counts -= np.stack([ground_truth == label for label in range(1, len(counts) + 1)])
-                n -= 1
-            for name, prior in zip(('WM', 'GM', 'HIPPOCAMPUS', 'AMYGDALA', 'THALAMUS'), counts / n):
-                image = sitk.GetImageFromArray(prior)
-                image.CopyInformation(self.img.images[structure.BrainImageTypes.T1w])
-                self.img.feature_images[f'PRIOR_{name}'] = image
-
-        if self.random_feature:
-            # pure noise as a control: a real feature less important than this one is useless. A separate random
-            # generator per subject, so the training voxels sampled with np.random stay the same
-            rng = np.random.default_rng(zlib.crc32(self.img.id_.encode()))
-            shape = sitk.GetArrayFromImage(self.img.images[structure.BrainImageTypes.T1w]).shape
-            image = sitk.GetImageFromArray(rng.standard_normal(shape).astype(np.float32))
-            image.CopyInformation(self.img.images[structure.BrainImageTypes.T1w])
-            self.img.feature_images['RANDOM_NOISE'] = image
-
->>>>>>> Stashed changes
         self._generate_feature_matrix()
 
         return self.img
+
+    def _compute(self, feature: fpool.Feature) -> sitk.Image:
+        """Computes a feature image, or loads it from the cache if the feature is cacheable and cached."""
+        if self.cache is None or not feature.cache:
+            return feature.compute(self.img)
+        image = self.cache.load(self.img.id_, feature)
+        if image is None:
+            image = feature.compute(self.img)
+            self.cache.save(self.img.id_, feature, image)
+        return image
 
     def _generate_feature_matrix(self):
         """Generates a feature matrix."""
@@ -197,15 +134,18 @@ class FeatureExtractor:
             mask = sitk.GetArrayFromImage(mask)
             mask = np.logical_not(mask)
 
-        # generate features
-        data = np.concatenate(
-            [self._image_as_numpy_array(image, mask) for id_, image in self.img.feature_images.items()],
-            axis=1)
+        # generate features: per feature image, keep only the selected components
+        data = []
+        for name, image in self.img.feature_images.items():
+            components = [column['component'] for column in self.columns if column['feature'] == name]
+            data.append(self._image_as_numpy_array(image, mask)[:, components])
+        data = np.concatenate(data, axis=1)
 
         # generate labels (note that we assume to have a ground truth even for testing)
         labels = self._image_as_numpy_array(self.img.images[structure.BrainImageTypes.GroundTruth], mask)
 
         self.img.feature_matrix = (data.astype(np.float32), labels.astype(np.int16))
+        self.img.feature_names = [column['name'] for column in self.columns]
 
     @staticmethod
     def _image_as_numpy_array(image: sitk.Image, mask: np.ndarray = None):
@@ -298,6 +238,8 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
 
     # execute pipeline on the T1w image
     img.images[structure.BrainImageTypes.T1w] = pipeline_t1.execute(img.images[structure.BrainImageTypes.T1w])
+    img.images[structure.BrainImageTypes.T1w] = _add_noise(img.images[structure.BrainImageTypes.T1w],
+                                                           img.images[structure.BrainImageTypes.BrainMask], **kwargs)
 
     # construct pipeline for T2w image pre-processing
     pipeline_t2 = fltr.FilterPipeline()
@@ -316,10 +258,11 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
                                                                         reference=atlas_t2, reference_mask=atlas_mask),
                             len(pipeline_t2.filters) - 1)
     
-    sitk.WriteImage(img.images[structure.BrainImageTypes.T1w], 'check_T1.nii.gz')
 
     # execute pipeline on the T2w image
     img.images[structure.BrainImageTypes.T2w] = pipeline_t2.execute(img.images[structure.BrainImageTypes.T2w])
+    img.images[structure.BrainImageTypes.T2w] = _add_noise(img.images[structure.BrainImageTypes.T2w],
+                                                           img.images[structure.BrainImageTypes.BrainMask], **kwargs)
 
     # construct pipeline for ground truth image pre-processing
     pipeline_gt = fltr.FilterPipeline()
@@ -343,6 +286,20 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
     # for training of the classifier
 
     return img
+
+
+def _add_noise(image: sitk.Image, brain_mask: sitk.Image, **kwargs) -> sitk.Image:
+    """Optional perturbation for the robustness experiment: Gaussian noise on the pre-processed image.
+
+    After z-score normalization, ``noise_std`` is in units of the brain's intensity standard deviation.
+    """
+    noise_std = kwargs.get('noise_std', 0)
+    if noise_std <= 0:
+        return image
+    noisy = sitk.AdditiveGaussianNoise(image, noise_std, 0.0, 42)
+    if kwargs.get('skullstrip_pre', False):
+        noisy = sitk.Mask(noisy, sitk.Cast(brain_mask > 0, sitk.sitkUInt8))
+    return noisy
 
 
 def post_process(img: structure.BrainImage, segmentation: sitk.Image, probability: sitk.Image,

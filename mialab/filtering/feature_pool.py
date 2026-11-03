@@ -8,7 +8,7 @@ Experiments select columns with a feature specification (see :func:`select_colum
 
     'baseline'                              a named set from FEATURE_SETS
     ['baseline', 'T2_intensity']            sets, feature names and column names can be mixed
-    ['all'], exclude=['family=gradient']    tag selectors: family=..., modality=..., scale=...
+    ['extended'], exclude=['family=gradient'] tag selectors: family=..., modality=..., scale=...
     ['T1_*']                                glob patterns on feature and column names
 """
 import fnmatch
@@ -16,7 +16,9 @@ import hashlib
 import json
 import os
 import typing as t
+import zlib
 
+import numpy as np
 import pymia.filtering.filter as fltr
 import SimpleITK as sitk
 
@@ -134,11 +136,108 @@ for _modality in MODALITIES:
 #         register(Feature('intensity', fltr_feat.SimpleITKFunction(sitk.SmoothingRecursiveGaussian, sigma=_sigma),
 #                          modality=_modality, measure='gaussian', scale=f's{_sigma}'))
 
+# --- Phase 3: extended features (the ones of Alejandro's notebook and others)
+for _modality in MODALITIES:
+    for _sigma in (1, 2, 4):    # sigma in mm, atlas has 1 mm voxel size)
+
+        # Gaussian smoothing: the average intensity of the surroundings, weighted by distance.
+        # Less noisy than the voxel itself and it includes some region info.
+        register(Feature('smoothing', fltr_feat.SimpleITKFunction(sitk.SmoothingRecursiveGaussian, sigma=_sigma),
+                         modality=_modality, measure='gaussian', scale=f's{_sigma}'))
+        # Laplacian of Gaussian: second derivative after smoothing. Responds to blobs and edges of size ~sigma:
+        # Strong at the GM/WM and GM/CSF boundaries and at thin structures.
+        register(Feature('log', fltr_feat.SimpleITKFunction(sitk.LaplacianRecursiveGaussian, sigma=_sigma),
+                         modality=_modality, measure='laplacian', scale=f's{_sigma}'))
+    # local mean and standard deviation in a 5x5x5 cube (radius 2 voxels). The std is low in uniform tissue and
+    # high at boundaries and partial-volume voxels. Outside the sigma loop: once per modality, not once per sigma.
+    register(Feature('localstats', fltr_feat.SimpleITKFunction(sitk.Mean, radius=[2, 2, 2]),
+                     modality=_modality, measure='mean', scale='r2'))
+    register(Feature('localstats', fltr_feat.SimpleITKFunction(sitk.Noise, radius=[2, 2, 2]),
+                     modality=_modality, measure='std', scale='r2'))
+
+# T1 - T2 (both z-scored): the two contrasts in one number. modality=None, because it uses both images; so
+# "exclude modality=T2" does not remove it, exclude "family=combination" as well for a "without T2" ablation.
+register(Feature('combination', fltr_feat.ImageDifference(), measure='T1_minus_T2',
+                 params=lambda img: fltr_feat.ImageParams(img.images[structure.BrainImageTypes.T2w])))
+
+# Probabilistic atlas built from the training subjects (leave-one-out for the training subjects themselves).
+# run_experiment.py fills LABEL_PRIOR with build_label_prior() before the training starts.
+LABEL_PRIOR = {}  # 'counts': np.ndarray (5, z, y, x), 'subject_ids': set of the training subject ids
+
+def _label_prior_params(img: structure.BrainImage) -> fltr.FilterParams:
+    if not LABEL_PRIOR:
+        raise RuntimeError('the label prior is selected, but LABEL_PRIOR is empty: call build_label_prior() first')
+    return fltr_feat.LabelPriorParams(LABEL_PRIOR['counts'], LABEL_PRIOR['subject_ids'], img.id_,
+                                      img.images[structure.BrainImageTypes.GroundTruth])
+
+register(Feature('prior', fltr_feat.LabelPrior(), params=_label_prior_params, 
+                 components=['WM', 'GM', 'hippocampus', 'amygdala', 'thalamus']))
+
+# Control, pure white noise. Not part of 'extended'; add it explicitly ("features": ["extended", "control_random"])
+register(Feature('control', fltr_feat.RandomNoiseImage(), measure='random',
+                 params=lambda img: fltr_feat.SeedParams(zlib.crc32(img.id_.encode()))))
+
+# --- Phase 3b: further features ("More feature ideas" in the feature pool doc) -------------------------------------
+# Each idea is its own family, so it can be added to 'extended' or left out on its own. 'extended' stays the
+# 29 features of Alejandro's notebook; 'extended_plus' = 'extended' + the 3 families below (35 features).
+
+
+def _brain_mask_params(img: structure.BrainImage) -> fltr.FilterParams:
+    """Passes the registered brain mask of the subject to a filter."""
+    return fltr_feat.ImageParams(img.images[structure.BrainImageTypes.BrainMask])
+
+
+# signed distance to the brain surface (mm, positive inside): cortex is near the surface, WM/thalamus deep inside
+register(Feature('distance', fltr_feat.SignedDistanceToMask(), measure='brain_border',
+                 params=_brain_mask_params))
+
+# signed distance (mm, negative inside) to the typical hippocampus / amygdala / thalamus region (prior > 0.5)
+register(Feature('priordistance', fltr_feat.PriorDistance(labels=(3, 4, 5), threshold=0.5),
+                 params=_label_prior_params, components=['hippocampus', 'amygdala', 'thalamus']))
+
+for _modality in MODALITIES:
+    # |I(x) - I(-x)|: difference to the mirror voxel in the other hemisphere
+    register(Feature('symmetry', fltr_feat.HemisphereAsymmetry(), modality=_modality, measure='absdiff'))
+
+
+# families that need the label prior (run_experiment.py builds it when one of them is selected)
+PRIOR_FAMILIES = ('prior', 'priordistance')
+
+# the further families, used for 'extended_plus'
+FURTHER_FAMILIES = ('distance', 'priordistance', 'symmetry')
+
+
+def build_label_prior(ground_truths: t.Dict[str, sitk.Image], n_labels: int = 5) -> dict:
+    """Counts per atlas voxel how many subjects have each label
+    
+    Args:
+        ground_truths (dict): subject id -> ground truth image **registered to the atlas**. Only pass
+            training subjects: a test subject in the prior would leak its labels into its own features.
+        n_labels (int): The number of foreground labels (1..n_labels).
+
+    
+        Returns:
+            dict: {'counts': np.ndarray of shape (n_labels, z, y, x) and dtype uint8, 'subject_ids': set}
+    """
+    counts = None
+    for ground_truth in ground_truths.values():
+        array = sitk.GetArrayFromImage(ground_truth)
+        one_hot = np.stack([array == label for label in range(1, n_labels + 1)]).astype(np.uint8)
+        counts = one_hot if counts is None else counts + one_hot
+    return {'counts': counts, 'subject_ids': set(ground_truths)}
+
 # named feature specifications; a set can use other sets
 FEATURE_SETS = {
     'baseline': ['spatial_coord', 'T1_intensity', 'T1_gradient_magnitude'],  # the features of the provided pipeline
     'baseline_t2': ['baseline', 'T2_intensity', 'T2_gradient_magnitude'],
-    'all': ['*'],
+    # everything except the noise control (the same 29 features as Alejandro's notebook)
+    'extended': ['family=spatial', 'family=intensity', 'family=gradient', 'family=smoothing', 'family=log',
+            'family=localstats', 'family=combination', 'family=prior'],
+    # all image-derived features, without any position information (no coordinates, no prior)
+    'image_only': ['family=intensity', 'family=gradient', 'family=smoothing', 'family=log', 'family=localstats', 
+                   'family=combination'],
+    # 'extended' plus the 3 further families (Phase 3b): 35 features
+    'extended_plus': ['extended'] + [f'family={family}' for family in FURTHER_FAMILIES],
 }
 
 # the boolean flags of the provided pipeline, still accepted by FeatureExtractor

@@ -185,17 +185,21 @@ cython_debug/
 .cursorindexingignore
 
 # VS Code
-<<<<<<< Updated upstream
 .vscode
-=======
-.vscode
-
-# Simple Version
-features/
-features_extended/
-*.mha
-*.nii.gz
-.ipynb_checkpoints/
 .idea/
 .DS_Store
->>>>>>> Stashed changes
+.ipynb_checkpoints/
+
+# pipeline output and caches
+feature_cache/
+mia-result/
+results/**/segmentations/
+results/**/*.tmp/
+results/_aggregate/
+*.mha
+*.nii.gz
+
+# extracted features for the analysis notebook (extract_features.py)
+features/
+features_extended/
+features_extended_plus/

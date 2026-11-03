@@ -1,0 +1,13 @@
+{
+  "description": "Extended features without the combination family (drop-one-family ablation, experiment 4)",
+  "pre_process": {
+    "features": "extended",
+    "exclude_features": [
+      "family=combination"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

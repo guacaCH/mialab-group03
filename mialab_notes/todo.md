@@ -22,15 +22,15 @@ Owner tags are a suggestion for an equal split (equal workload is required to pa
 
 The provided pipeline still contains exercise `# todo`s. Several of them silently break our study, so they come first.
 
-- [ ] **1.1 [A] Apply the registration** (`mialab/filtering/preprocessing.py`, `ImageRegistration.execute`). Use the provided affine transform with `sitk.Resample(image, atlas, transform, interpolator)`; use `sitk.sitkNearestNeighbor` for the ground truth and brain mask, `sitk.sitkLinear` for T1/T2. Enable `registration_pre: True` in `pipeline.py`.
+- [x] **1.1 [A] Apply the registration** (`mialab/filtering/preprocessing.py`, `ImageRegistration.execute`). Use the provided affine transform with `sitk.Resample(image, atlas, transform, interpolator)`; use `sitk.sitkNearestNeighbor` for the ground truth and brain mask, `sitk.sitkLinear` for T1/T2. Enable `registration_pre: True` in `pipeline.py`.
   - *Why:* without registration, the **atlas coordinate features are meaningless** (each subject is in its own position), and coordinates are probably our most important feature for small structures.
   - *Done when:* a registered T1 overlaid on the atlas in ITK-SNAP lines up.
-- [ ] **1.2 [A] Skull stripping** (`SkullStripping.execute`): `sitk.Mask(image, mask)`.
-- [ ] **1.3 [A] Z-score normalization** (`ImageNormalization.execute`): `(x - mean) / std` computed inside the brain mask; enable `normalization_pre: True`.
+- [x] **1.2 [A] Skull stripping** (`SkullStripping.execute`): `sitk.Mask(image, mask)`.
+- [x] **1.3 [A] Z-score normalization** (`ImageNormalization.execute`): `(x - mean) / std` computed inside the brain mask; enable `normalization_pre: True`.
   - *Why:* intensity-based features must be comparable across subjects, otherwise the forest learns scanner differences.
-- [ ] **1.4 [C] Add HD95** in `init_evaluator()` (`pipeline_utilities.py:293`): `metric.HausdorffDistance(percentile=95, metric='HDRFDST95')`.
-- [ ] **1.5 [C] Results plotting** (`plot_results.py`): load `results.csv`, boxplot Dice and HD95 per label.
-- [ ] **1.6 [B] Make runs reproducible.** Set seeds (`np.random.seed`, `random_state` in the forest), since training voxels are sampled randomly.
+- [x] **1.4 [C] Add HD95** in `init_evaluator()` (`pipeline_utilities.py:293`): `metric.HausdorffDistance(percentile=95, metric='HDRFDST95')`.
+- [x] **1.5 [C] Results plotting** (`plot_results.py`): load `results.csv`, boxplot Dice and HD95 per label.
+- [x] **1.6 [B] Make runs reproducible.** Set seeds (`np.random.seed`, `random_state` in the forest), since training voxels are sampled randomly.
 - [ ] **1.7 [B] Choose and freeze the random forest.** Try a few settings on the *current* features only, e.g. `n_estimators` ∈ {50, 100}, `max_depth` ∈ {15, 25, None}, `class_weight` ∈ {None, "balanced"}. Pick one with good Dice and acceptable run time and **never change it again**.
   - *Why:* the current 1-tree, depth-5 forest is so weak that it hides any effect of features. Freezing it means later differences come only from features.
   - *Watch out:* don't tune on the test set too much; ideally use a few training subjects as validation (e.g. 15 train / 5 validation).
@@ -38,10 +38,10 @@ The provided pipeline still contains exercise `# todo`s. Several of them silentl
 
 ## Phase 2: Experiment infrastructure (week of 19.10 → 26.10)
 
-- [ ] **2.1 [B] Configurable feature sets.** Refactor `FeatureExtractor` (`pipeline_utilities.py`) so a feature set is selected by name or a list of feature IDs, not by three booleans. Each feature gets a name tagged with family, modality, scale (e.g. `T2_firstorder_variance_r2`). Store the names alongside the feature matrix.
+- [x] **2.1 [B] Configurable feature sets.** Refactor `FeatureExtractor` (`pipeline_utilities.py`) so a feature set is selected by name or a list of feature IDs, not by three booleans. Each feature gets a name tagged with family, modality, scale (e.g. `T2_firstorder_variance_r2`). Store the names alongside the feature matrix.
 - [ ] **2.2 [A] Feature cache.** Compute feature maps once per subject and save them (e.g. `.npy` or `.nii.gz` in a git-ignored `feature_cache/`). Experiments then load columns instead of recomputing.
   - *Why:* PyRadiomics voxel-based extraction is slow; you don't want to recompute it for every experiment.
-- [ ] **2.3 [B] Experiment runner.** A script `run_experiment.py --features <set> --seed <n> --out <dir>` that trains, predicts, evaluates and writes `results.csv` + the config used. Run all experiments through it.
+- [x] **2.3 [B] Experiment runner.** A script `run_experiment.py --features <set> --seed <n> --out <dir>` that trains, predicts, evaluates and writes `results.csv` + the config used. Run all experiments through it.
 - [ ] **2.4 [C] Aggregation script.** Collect all `results.csv` into one table (experiment, seed, subject, label, Dice, HD95). Compute mean ± std and the **paired Wilcoxon test** vs. baseline (`scipy.stats.wilcoxon`).
   - *Done when:* one command produces a summary table for any set of experiments.
 

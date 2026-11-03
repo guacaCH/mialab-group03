@@ -1,0 +1,14 @@
+{
+  "description": "Extended features without any T2 information",
+  "pre_process": {
+    "features": "extended",
+    "exclude_features": [
+      "modality=T2",
+      "family=combination"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}
