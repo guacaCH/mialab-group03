@@ -1,0 +1,25 @@
+{
+  "description": "extended_plus without 10 features that correlate (|spearman r| >= 0.9) with a more important one",
+  "pre_process": {
+    "features": "extended_plus",
+    "exclude_features": [
+      "T1_localstats_mean_r2",
+      "T2_smoothing_gaussian_s2",
+      "T2_intensity",
+      "T1_intensity",
+      "T1_smoothing_gaussian_s1",
+      "priordistance_amygdala",
+      "priordistance_thalamus",
+      "T1_symmetry_absdiff",
+      "T1_localstats_std_r2",
+      "T2_gradient_magnitude"
+    ]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20,
+    "max_features": "sqrt",
+    "class_weight": null,
+    "n_jobs": -1
+  }
+}
