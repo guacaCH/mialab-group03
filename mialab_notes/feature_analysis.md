@@ -93,7 +93,57 @@ results/<experiment>/analysis/
 
 **Gini vs. SHAP.** The forest's own importance (Gini) is computed on the training data and favours features with many different values. SHAP measures how much each feature actually changes the predicted probabilities. When the two disagree, trust SHAP. Example from `extended_plus`: `T2_symmetry_absdiff` is rank 7 by Gini but rank 15 by SHAP. The SHAP bar plot also shows *for which label* a feature matters, e.g. `priordistance_thalamus` is used almost only for the thalamus, and `prior_amygdala` mostly for the amygdala. A feature with a low overall rank can still be essential for one small structure.
 
-**Beeswarm.** In `shap_beeswarm_Hippocampus.png`, for instance, red dots on the right mean "a high value of this feature makes the voxel more likely to be hippocampus". A clean red/blue split means the feature works like a clear threshold.
+**SHAP beeswarm (`shap_beeswarm_<label>.png`).** There is one plot per label, and each answers: *how does each feature push a voxel towards or away from this label?*
+
+- **One row per feature**, sorted from top (most important for this label) to bottom. The order differs between labels.
+- **One dot per voxel** of the sample (2000 by default) in every row. Where many voxels have similar values, the dots pile up into a thick band.
+- **x position = SHAP value**: how much this feature changed the predicted probability of this label for this voxel, compared with the average voxel. +0.2 means "this feature raised the probability of hippocampus by 0.2 (20 percentage points)", −0.1 means it lowered it by 0.1. The grey line at 0 means "no effect".
+- **Colour = the feature's own value** for that voxel: red = high, blue = low, purple = in between. It is relative to that feature's range, so "high" for `T1_intensity` and for `prior_WM` are different numbers.
+
+How to read the colour and position together:
+
+| What you see | Meaning |
+|---|---|
+| red dots on the **right**, blue on the left | high values → **more** likely this label (positive relation) |
+| red dots on the **left**, blue on the right | high values → **less** likely this label (negative relation) |
+| **blue** dots on the right | low values → more likely this label |
+| red and blue cleanly separated | the feature acts like a clear threshold: a good, easy-to-use feature |
+| colours mixed on both sides | the effect depends on other features (interactions); the value alone doesn't tell the direction |
+| all dots in a narrow band around 0 | the feature hardly matters for this label |
+| a long tail on one side only | the feature matters strongly for a few voxels and not at all for the rest |
+
+Examples from `shap_beeswarm_Hippocampus.png` (`extended_plus`):
+- `prior_hippocampus`: **red on the right** (up to +0.2). Voxels where many training subjects had hippocampus are likely hippocampus. This is the expected direction.
+- `priordistance_hippocampus`: **blue on the right**, with a long tail up to +0.27. The distance is negative inside the typical hippocampus region, so a *low* value means "inside the region", and that pushes towards hippocampus. Blue on the right is correct here; it depends on the sign convention of the feature.
+- `prior_amygdala`: **many red dots on the left** (down to −0.15). Where the amygdala usually is, the voxel is *not* hippocampus. The feature helps by ruling out the neighbouring structure.
+- `prior_GM`: red on the left. Typical cortex positions are not hippocampus.
+- The `log_laplacian` rows at the bottom: all dots near 0, so these features are not used for the hippocampus.
+
+So "many red dots on the left" means: **when this feature is high, the forest is less likely to predict this label**. That is not bad; a feature that excludes a label is as useful as one that confirms it. What makes a feature useful is how far the dots spread from 0, not to which side.
+
+**Correlation heatmap (`correlation_heatmap.png`).** It shows the correlation of every feature with every other feature: the same feature names on both axes, one coloured square per pair.
+
+- **Colour = correlation r**: dark red = +1 (they rise together), dark blue = −1 (one rises when the other falls), white = 0 (unrelated). The diagonal is always dark red (each feature with itself).
+- **Rows and columns are reordered** by the clustering, so features that correlate sit next to each other and form **coloured blocks** along the diagonal. The matrix is symmetric: the upper and lower triangles show the same values.
+- **The tree (dendrogram)** on the top and the left shows the clustering. Two features or groups are joined by a horizontal bar, at a height of 1 − |r| between their *least* similar members. A join close to the heatmap means strongly correlated; a join far away means unrelated. The groups in `correlation_groups.csv` are the branches that join below 1 − threshold (0.1 for `--threshold 0.9`).
+
+How to read it:
+
+| What you see | Meaning |
+|---|---|
+| dark red block on the diagonal | a group of features that carry nearly the same information: candidates to drop all but one |
+| dark **blue** squares | strong negative correlation: just as redundant as dark red (the sign doesn't matter for the forest) |
+| a row/column that is white everywhere | a feature unrelated to all others: unique information, never dropped (whether it is *useful* is shown by SHAP) |
+| a light block (pale red/blue) | related, but each feature still adds something of its own |
+
+Examples from `extended_plus`:
+- The big block in the upper left: `T1_intensity`, `T1_smoothing_gaussian_s1/s2`, `T1_localstats_mean_r2` and `combination_T1_minus_T2` are dark red with each other. Smoothing an image a little and averaging over 5×5×5 voxels give nearly the original image, so they are redundant.
+- In the same area, the T1 features and the T2 features are **dark blue** with each other: after normalization, tissue that is bright in T1 is dark in T2. T2 therefore adds little that T1 doesn't already have *at the same voxel*.
+- The block of `T1/T2_gradient_magnitude`, `T1/T2_localstats_std_r2` and `T1/T2_symmetry_absdiff`: all of them are high at tissue borders. `prior_GM` sits next to it in a lighter red (r ≈ 0.6): the cortex is full of borders, but the prior still adds information of its own.
+- `spatial_coord_x` is white everywhere: left/right position is unrelated to everything else (the brain is nearly symmetric), and SHAP shows it is also not useful.
+- The `log_laplacian` features at `s1` and `s2` form their own small blocks, with blue between T1 and T2 of the same scale.
+
+Use the heatmap together with the SHAP plots. In a dark block, the feature with the highest SHAP value is the one to keep, which is what `correlation_groups.csv` does automatically.
 
 **Boruta.** A feature is *confirmed* when it beats the best shuffled feature significantly often. With many voxels almost every feature with any signal is confirmed (in `extended_plus` all 35 were). Boruta then tells you that nothing is pure noise, but not which features are dispensable. To make it stricter, use fewer voxels (`--n_samples 2000`), or add the random control column to the experiment (`"features": ["extended_plus", "control_random"]`) and check which features rank below it.
 
