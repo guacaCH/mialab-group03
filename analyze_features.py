@@ -46,6 +46,9 @@ import run_experiment as rexp  # noqa: E402
 SCRIPT_DIR = rexp.SCRIPT_DIR
 LABEL_NAMES = rexp.LABEL_NAMES
 
+# name of the random noise reference column (the same as the feature pool's control feature)
+NOISE = 'control_random'
+
 # default number of training voxels per command (balanced over the labels); None = all training voxels
 DEFAULT_SAMPLES = {'shap': 2000, 'boruta': 10000, 'correlation': None}
 
@@ -131,8 +134,9 @@ def print_table(title: str, df: pd.DataFrame):
     print(df.to_string(float_format=lambda v: f'{v:.4f}') if len(df) else '(none)')
 
 
-def save_figure(fig, path: str):
-    fig.tight_layout()
+def save_figure(fig, path: str, tight: bool = True):
+    if tight:
+        fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print('plot:', path)
@@ -196,16 +200,34 @@ def shap_analysis(args):
     print_table('mean |SHAP| per label (overall = mean over the labels)', result)
 
     if args.plot:
+        families = feature_families(args.results_dir, args.experiment, args.seed)
+        colors = family_colors(families.reindex(result.index))
+        height = 0.25 * len(result) + 1.5
+        # overall: one bar per feature, coloured by family
         order = result.index[::-1]
-        fig, ax = plt.subplots(figsize=(8, 0.25 * len(result) + 1.5))
-        left = np.zeros(len(order))
-        for label in labels:
-            ax.barh(order, per_label.loc[order, label], left=left, label=label)
-            left += per_label.loc[order, label].values
-        ax.set_xlabel('mean |SHAP value| (stacked over the labels)')
-        ax.set_title(f'{args.experiment}, seed {args.seed}')
-        ax.legend(fontsize=7, loc='lower right')
+        fig, ax = plt.subplots(figsize=(7, height))
+        ax.barh(order, result.loc[order, 'overall'], color=[colors[families[n]] for n in order])
+        ax.legend(handles=[Patch(color=c, label=f) for f, c in colors.items()], fontsize=7, loc='lower right')
+        ax.set_xlabel('mean |SHAP value|, averaged over the labels')
+        ax.set_title(f'SHAP, {args.experiment}, seed {args.seed}')
         save_figure(fig, os.path.join(out_dir, 'shap_bar.png'))
+        # per label: one panel per label, each feature its own bar, sorted by the importance for that label
+        n_cols = 3
+        n_rows = int(np.ceil(len(labels) / n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, height * n_rows), squeeze=False)
+        for ax, label in zip(axes.flat, labels):
+            values_label = per_label[label].sort_values()
+            ax.barh(values_label.index, values_label.values, color=[colors[families[n]] for n in values_label.index])
+            ax.set_title(label)
+            ax.tick_params(axis='y', labelsize=7)
+            ax.set_xlabel('mean |SHAP value|')
+        for ax in axes.flat[len(labels):]:
+            ax.axis('off')
+        fig.legend(handles=[Patch(color=c, label=f) for f, c in colors.items()], fontsize=8, loc='lower center',
+                   ncol=min(len(colors), 6))
+        fig.suptitle(f'SHAP per label, {args.experiment}, seed {args.seed}')
+        fig.tight_layout(rect=(0, 0.03, 1, 0.97))
+        save_figure(fig, os.path.join(out_dir, 'shap_bar_per_label.png'), tight=False)
         # beeswarm: every dot is a voxel; colour = feature value, position = effect on that label's probability
         for i, label in enumerate(labels):
             shap.summary_plot(values[:, :, i], x[index], feature_names=names, show=False,
@@ -223,26 +245,46 @@ def boruta(args):
     out_dir = os.path.join(args.results_dir, args.experiment, 'analysis', f'seed_{args.seed}')
     x, y = training_data(run, out_dir, args)
     index = balanced_sample(y, n_samples(args, 'boruta'), args.seed)
+    names = list(run['feature_names'])
+    x_sample = x[index]
+    if NOISE not in names:
+        # a pure noise column as a reference: a feature that is not clearly above it carries no information
+        noise = np.random.default_rng(args.seed).standard_normal(len(index)).astype(np.float32)
+        x_sample = np.column_stack([x_sample, noise])
+        names.append(NOISE)
     print(f'Boruta on {len(index)} voxels, at most {args.max_iter} iterations')
     # a smaller forest than the run's: Boruta trains one per iteration
     selector = BorutaPy(sk_ensemble.RandomForestClassifier(max_depth=7, class_weight='balanced', n_jobs=-1),
                         n_estimators='auto', max_iter=args.max_iter, random_state=args.seed)
-    selector.fit(x[index], y[index])
+    selector.fit(x_sample, y[index])
     decision = np.where(selector.support_, 'confirmed', np.where(selector.support_weak_, 'tentative', 'rejected'))
-    result = pd.DataFrame({'decision': decision, 'rank': selector.ranking_}, index=run['feature_names'])
-    result = result.sort_values(['rank', 'decision'])
+    # importance of every feature in every iteration (row 0 is Boruta's empty start row; NaN once rejected)
+    history = pd.DataFrame(selector.importance_history_[1:], columns=names)
+    result = pd.DataFrame({'decision': decision, 'rank': selector.ranking_,
+                           'median_importance': history.median()}, index=names)
+    result['above_noise'] = result['median_importance'] > result.loc[NOISE, 'median_importance']
+    result = result.sort_values(['rank', 'median_importance'], ascending=[True, False])
     result.to_csv(os.path.join(out_dir, 'boruta.csv'), index_label='feature')
-    print_table('Boruta (rank 1 = confirmed; higher rank = rejected earlier)', result)
+    print_table(f'Boruta (rank 1 = confirmed; higher rank = rejected earlier; {NOISE} = pure noise reference)',
+                result)
     print(result['decision'].value_counts().to_string())
+    print(f'{(~result["above_noise"]).sum() - 1} feature(s) with a median importance below the noise')
 
     if args.plot:
-        colors = {'confirmed': 'tab:green', 'tentative': 'tab:orange', 'rejected': 'tab:red'}
-        order = result.index[::-1]
-        fig, ax = plt.subplots(figsize=(7, 0.25 * len(result) + 1.5))
-        ax.barh(order, result.loc[order, 'rank'], color=[colors[d] for d in result.loc[order, 'decision']])
-        ax.legend(handles=[Patch(color=c, label=d) for d, c in colors.items()], fontsize=7, loc='lower right')
-        ax.set_xlabel('Boruta rank (1 = confirmed)')
-        ax.set_title(f'{args.experiment}, seed {args.seed}')
+        colors = {'confirmed': 'tab:green', 'tentative': 'tab:orange', 'rejected': 'tab:red', NOISE: 'tab:gray'}
+        order = list(result.sort_values('median_importance').index)
+        fig, ax = plt.subplots(figsize=(8, 0.25 * len(order) + 1.5))
+        boxes = ax.boxplot([history[name].dropna() for name in order], vert=False, patch_artist=True, widths=0.6,
+                           flierprops={'markersize': 2}, medianprops={'color': 'black'})
+        ax.set_yticks(range(1, len(order) + 1), order)
+        for box, name in zip(boxes['boxes'], order):
+            box.set_facecolor(colors[NOISE if name == NOISE else result.loc[name, 'decision']])
+            box.set_alpha(0.8)
+        ax.axvline(result.loc[NOISE, 'median_importance'], color='tab:gray', linestyle='--', linewidth=1)
+        ax.legend(handles=[Patch(color=c, label='random noise (reference)' if d == NOISE else d)
+                           for d, c in colors.items()], fontsize=7, loc='lower right')
+        ax.set_xlabel('feature importance in each Boruta iteration (dashed: median of the random noise)')
+        ax.set_title(f'Boruta, {args.experiment}, seed {args.seed}')
         save_figure(fig, os.path.join(out_dir, 'boruta.png'))
     return result
 

@@ -143,7 +143,7 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
 <div class="verdict">
   <span class="pill">Not supported</span>
   <p>Performance does not rise with the number of features. It jumps once, when five label-prior features add <em>where</em> each structure usually lies, and then stays flat from 12 to 35 features.</p>
-  <p class="meta">Six feature sets with 5 to 35 features, 3 seeds each, 10 test subjects, Dice and 95th-percentile Hausdorff distance (HD95) per structure.</p>
+  <p class="meta">Seven feature sets with 5 to 35 features, 3 seeds each, 10 test subjects, Dice and 95th-percentile Hausdorff distance (HD95) per structure.</p>
 </div>
 
 <div class="kpis">
@@ -180,7 +180,7 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
     <figure>
       <div class="legend" id="legend-hd"></div>
       <svg id="chart-hd" viewBox="0 0 460 300" role="img" aria-label="HD95 per structure for each feature set"></svg>
-      <figcaption><strong>HD95 per structure (mm, lower is better).</strong> HD95 halves at the same step. Note the hippocampus spike at 29 features (<code>extended</code>).</figcaption>
+      <figcaption><strong>HD95 per structure (mm, lower is better).</strong> HD95 halves at the same step. The hippocampus spikes at 29 and 31 features, the two sets without the distance features.</figcaption>
     </figure>
   </div>
 </section>
@@ -209,6 +209,11 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
       <p>The 29-feature set has slightly <em>better</em> Dice than the 35-feature set (amygdala +0.017, hippocampus +0.014, p = 0.002), but its hippocampus HD95 is twice as high (8.9 vs 4.2 mm) in every subject and every seed. That points to scattered false-positive voxels far from the hippocampus, which the distance-to-hippocampus feature removes. Adding features traded one metric against the other.</p>
     </li>
     <li>
+      <span class="step">extended_plus_no_distance → extended_plus · 31 → 35 features</span>
+      <h3>The distance features fix the outliers, not the overlap</h3>
+      <p>Removing the 4 distance features (distance to the brain border and to the typical hippocampus, amygdala and thalamus regions) gives 31 features that behave like <code>extended</code>. They have the highest mean Dice of all sets (0.730), but hippocampus HD95 jumps back to 8.9 mm. Adding the 4 distance features cuts hippocampus HD95 from 8.9 to 4.2 mm and amygdala HD95 from 5.0 to 4.0 mm, and costs 0.020 Dice on the amygdala and 0.017 on the hippocampus (all p = 0.002). The 2 symmetry features that separate 29 from 31 features change Dice by at most 0.003. Again, the kind of feature decides, and it moves the two metrics in opposite directions.</p>
+    </li>
+    <li>
       <span class="step">extended_plus → reduced · 35 → 25 features</span>
       <h3>Removing 10 redundant features costs almost nothing</h3>
       <p>The 10 features removed correlate with a more important one (|r| ≥ 0.9). Dice changes by at most ±0.009 per structure. Only amygdala HD95 gets worse (+1.7 mm), because <code>priordistance_amygdala</code> was among the removed features although it keeps amygdala outliers away.</p>
@@ -233,7 +238,7 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
   <h2>Conclusion</h2>
   <div class="conclusion">
     <p>Features that add new information improve the segmentation; adding features in itself does not.</p>
-    <p>The improvement comes from anatomical location (label prior and distance features), mainly for hippocampus, amygdala and thalamus. Beyond about 12 well-chosen features, more features give diminishing returns: the metrics barely move, and the pre-processing time grows several-fold. A reformulated hypothesis for further work: <em>features that encode anatomical location improve the segmentation of subcortical structures more than additional intensity-derived features.</em></p>
+    <p>The improvement comes from anatomical location, mainly for hippocampus, amygdala and thalamus: the label prior raises the overlap (Dice), and the distance features remove scattered voxels far from the structure (HD95) at a small cost in Dice. Beyond about 12 well-chosen features, more features give diminishing returns: the metrics barely move, and the pre-processing time grows several-fold. A reformulated hypothesis for further work: <em>features that encode anatomical location improve the segmentation of subcortical structures more than additional intensity-derived features.</em></p>
   </div>
 </section>
 
@@ -242,7 +247,7 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
   <ul class="plain prose">
     <li>Only 10 test subjects. With 10 pairs, p = 0.002 means that all 10 subjects changed in the same direction; it says nothing about the size of the effect.</li>
     <li>The forest settings were fixed for all feature sets and not tuned per set. A set with more features might profit from more trees or a different number of features per split.</li>
-    <li>The feature sets are nested and not random: the feature count and the kind of information change together. The 12-feature set with the prior and the 25-feature reduced set are what separates the two effects.</li>
+    <li>The feature sets are nested and not random: the feature count and the kind of information change together. The 12-feature set with the prior, the 25-feature reduced set and the 31-feature set without distances are what separate the two effects.</li>
     <li>No post-processing was applied. It may remove some of the scattered voxels that drive HD95.</li>
   </ul>
 </section>
@@ -250,7 +255,8 @@ footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--ru
 <section>
   <h2>Reproduce</h2>
   <pre>python run_experiment.py experiments/&lt;name&gt;.json --seeds 0 1 2   # baseline, baseline_t2, prior_only,
-                                                                 # extended, extended_plus, extended_plus_reduced_r09
+                                                                 # extended, extended_plus, extended_plus_reduced_r09,
+                                                                 # extended_plus_no_distance
 python aggregate_results.py --baseline baseline --plot
 python analyze_features.py all --experiment extended_plus --plot</pre>
   <p class="meta">Branch <code>alejandro</code>. Results in <code>results/_aggregate/</code> (tables, Wilcoxon tests, boxplots) and <code>results/extended_plus/analysis/</code> (SHAP, Boruta, correlation).</p>
@@ -284,6 +290,9 @@ const EXPERIMENTS = [
   { id: 'extended', short: 'extended', n: 29, added: '+ multi-scale, local stats, T1−T2', test_s: 44.1,
     dice: { Amygdala: 0.629, GreyMatter: 0.724, Hippocampus: 0.647, Thalamus: 0.806, WhiteMatter: 0.838 },
     hd: { Amygdala: 5.296, GreyMatter: 2.005, Hippocampus: 8.919, Thalamus: 3.601, WhiteMatter: 1.941 } },
+  { id: 'extended_plus_no_distance', short: 'no dist.', n: 31, added: 'extended_plus without the 4 distance features', test_s: 71.8,
+    dice: { Amygdala: 0.632, GreyMatter: 0.723, Hippocampus: 0.650, Thalamus: 0.807, WhiteMatter: 0.838 },
+    hd: { Amygdala: 5.015, GreyMatter: 2.023, Hippocampus: 8.940, Thalamus: 3.501, WhiteMatter: 1.949 } },
   { id: 'extended_plus', short: 'ext_plus', n: 35, added: '+ distances, prior distances, symmetry', test_s: 79.4,
     dice: { Amygdala: 0.612, GreyMatter: 0.726, Hippocampus: 0.633, Thalamus: 0.802, WhiteMatter: 0.839 },
     hd: { Amygdala: 3.988, GreyMatter: 2.054, Hippocampus: 4.206, Thalamus: 3.244, WhiteMatter: 1.941 } },
@@ -326,10 +335,10 @@ function legend(id) {
   document.getElementById(id).innerHTML = LABELS
     .map(l => `<span><i style="background:var(${l.color})"></i>${l.name}</span>`).join('');
 }
-function chart(id, field, yMin, yMax, ticks, decimals) {
+function chart(id, field, yMin, yMax, ticks, decimals, yLabel) {
   const svg = document.getElementById(id);
   svg.innerHTML = '';
-  const W = 460, H = 300, m = { l: 44, r: 14, t: 12, b: 50 };
+  const W = 460, H = 300, m = { l: 58, r: 14, t: 12, b: 50 };
   const x = i => m.l + (i + 0.5) * (W - m.l - m.r) / EXPERIMENTS.length;
   const y = v => m.t + (yMax - v) / (yMax - yMin) * (H - m.t - m.b);
   const ink = css('--ink'), muted = css('--muted'), rule = css('--rule');
@@ -341,6 +350,9 @@ function chart(id, field, yMin, yMax, ticks, decimals) {
     svg.appendChild(el('text', { x: m.l - 6, y: y(t) + 4, 'text-anchor': 'end', 'font-size': 11, fill: muted,
       'font-family': 'IBM Plex Mono, monospace' }, t.toFixed(decimals)));
   }
+  const yMid = (m.t + H - m.b) / 2;
+  svg.appendChild(el('text', { x: 14, y: yMid, transform: `rotate(-90 14 ${yMid})`, 'text-anchor': 'middle',
+    'font-size': 11.5, fill: ink, 'font-family': 'IBM Plex Sans, sans-serif' }, yLabel));
   EXPERIMENTS.forEach((e, i) => {
     svg.appendChild(el('text', { x: x(i), y: H - m.b + 18, 'text-anchor': 'middle', 'font-size': 11, fill: ink,
       'font-family': 'IBM Plex Sans, sans-serif' }, e.short));
@@ -359,8 +371,8 @@ function chart(id, field, yMin, yMax, ticks, decimals) {
   }
 }
 function draw() {
-  chart('chart-dice', 'dice', 0.45, 0.85, [0.45, 0.55, 0.65, 0.75, 0.85], 2);
-  chart('chart-hd', 'hd', 0, 14, [0, 2, 4, 6, 8, 10, 12, 14], 0);
+  chart('chart-dice', 'dice', 0.45, 0.85, [0.45, 0.55, 0.65, 0.75, 0.85], 2, 'Dice (higher is better)');
+  chart('chart-hd', 'hd', 0, 14, [0, 2, 4, 6, 8, 10, 12, 14], 0, 'HD95 in mm (lower is better)');
 }
 legend('legend-dice'); legend('legend-hd');
 draw();

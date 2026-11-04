@@ -1,0 +1,11 @@
+{
+  "description": "extended_plus without the distance to the brain border and the distances to the typical subcortical regions (31 features)",
+  "pre_process": {
+    "features": "extended_plus",
+    "exclude_features": ["family=distance", "family=priordistance"]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}

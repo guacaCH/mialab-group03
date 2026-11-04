@@ -69,7 +69,7 @@ results/<experiment>/analysis/
 ├── importance_gini.csv / .png
 └── seed_<seed>/
     ├── train.npz
-    ├── shap_importance.csv, shap_bar.png, shap_beeswarm_<label>.png
+    ├── shap_importance.csv, shap_bar.png, shap_bar_per_label.png, shap_beeswarm_<label>.png
     ├── boruta.csv / .png
     ├── correlation_matrix.csv, correlation_pairs.csv, correlation_groups.csv, correlation_heatmap.png
     └── feature_summary.csv
@@ -80,9 +80,11 @@ results/<experiment>/analysis/
 | `importance_gini.csv` | per feature: `mean`, `std` over seeds, `n_seeds`, `rank` |
 | `importance_gini.png` | bar per feature with std as error bar, coloured by feature family |
 | `shap_importance.csv` | per feature: mean \|SHAP\| for every label, `overall` (mean over labels), `rank` |
-| `shap_bar.png` | mean \|SHAP\| stacked by label: shows **for which structure** a feature is used |
+| `shap_bar.png` | one bar per feature: mean \|SHAP\| averaged over the labels, coloured by feature family |
+| `shap_bar_per_label.png` | one panel per label, one bar per feature, sorted by the importance for that label: shows **for which structure** a feature is used |
 | `shap_beeswarm_<label>.png` | one dot per voxel: x = effect on the probability of this label, colour = feature value (red high, blue low) |
-| `boruta.csv` / `.png` | per feature: `decision` (confirmed / tentative / rejected) and `rank` (1 = confirmed) |
+| `boruta.csv` | per feature: `decision` (confirmed / tentative / rejected), `rank` (1 = confirmed), `median_importance` over the Boruta iterations and `above_noise`. The row `control_random` is a pure noise column added as a reference |
+| `boruta.png` | one box per feature: its importance in every Boruta iteration, coloured by the decision. The grey box and the dashed line are the random noise reference |
 | `correlation_matrix.csv` | the full feature × feature correlation matrix |
 | `correlation_pairs.csv` | all pairs with \|r\| ≥ threshold, strongest first |
 | `correlation_groups.csv` | features in a group of mutually correlated features, with `importance` and `action` (keep / drop) |
@@ -91,7 +93,7 @@ results/<experiment>/analysis/
 
 ## 4. How to read the results
 
-**Gini vs. SHAP.** The forest's own importance (Gini) is computed on the training data and favours features with many different values. SHAP measures how much each feature actually changes the predicted probabilities. When the two disagree, trust SHAP. Example from `extended_plus`: `T2_symmetry_absdiff` is rank 7 by Gini but rank 15 by SHAP. The SHAP bar plot also shows *for which label* a feature matters, e.g. `priordistance_thalamus` is used almost only for the thalamus, and `prior_amygdala` mostly for the amygdala. A feature with a low overall rank can still be essential for one small structure.
+**Gini vs. SHAP.** The forest's own importance (Gini) is computed on the training data and favours features with many different values. SHAP measures how much each feature actually changes the predicted probabilities. When the two disagree, trust SHAP. Example from `extended_plus`: `T2_symmetry_absdiff` is rank 7 by Gini but rank 15 by SHAP. The per-label SHAP plot (`shap_bar_per_label.png`) also shows *for which label* a feature matters, e.g. `priordistance_thalamus` is the top feature for the thalamus but also helps white and grey matter, and `prior_amygdala` matters mostly for the amygdala. A feature with a low overall rank can still be essential for one small structure.
 
 **SHAP beeswarm (`shap_beeswarm_<label>.png`).** There is one plot per label, and each answers: *how does each feature push a voxel towards or away from this label?*
 
@@ -145,7 +147,14 @@ Examples from `extended_plus`:
 
 Use the heatmap together with the SHAP plots. In a dark block, the feature with the highest SHAP value is the one to keep, which is what `correlation_groups.csv` does automatically.
 
-**Boruta.** A feature is *confirmed* when it beats the best shuffled feature significantly often. With many voxels almost every feature with any signal is confirmed (in `extended_plus` all 35 were). Boruta then tells you that nothing is pure noise, but not which features are dispensable. To make it stricter, use fewer voxels (`--n_samples 2000`), or add the random control column to the experiment (`"features": ["extended_plus", "control_random"]`) and check which features rank below it.
+**Boruta.** A feature is *confirmed* when it beats the best shuffled feature significantly often. With many voxels almost every feature with any signal is confirmed (in `extended_plus` all 35 were). Boruta then tells you that nothing is pure noise, but not which features are dispensable. To make it stricter, use fewer voxels (`--n_samples 2000`).
+
+**Boruta plot and the noise reference.** The `boruta` command always adds a column of pure random noise (`control_random`; unless the experiment already has it). Noise carries no information about the labels, so it shows how important a useless feature looks. In `boruta.png` every box is one feature: the spread of its importance over the Boruta iterations. Read it against the dashed line (median importance of the noise):
+- a box far to the right of the line: clearly informative;
+- a box just right of the line: barely better than noise, a candidate to leave out even if Boruta confirmed it;
+- a box overlapping or left of the line: no better than noise (`above_noise` = False in `boruta.csv`).
+
+The noise box is short because Boruta rejects the noise after a few iterations and stops computing its importance. In `extended_plus` every feature is above the noise, but the Laplacian-of-Gaussian features at scale 1 and 2 and `spatial_coord_x` are only just above it, which agrees with SHAP.
 
 **Correlation: which features can be left out.**
 1. All features are clustered with distance `1 - |r|` (complete linkage). Every pair of features in a group has \|r\| ≥ threshold, so each group carries roughly the same information.
