@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>More Features, Better Segmentation?</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout: one reading column (~70ch) for a lab report; tables and charts may go wider up to 980px. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --ink: #1b2430;
+  --muted: #5b6675;
+  --rule: #dfe3e8;
+  --accent: #1f6f78;
+  --accent-soft: #e3f0f1;
+  --bad: #a3392e;
+  --bad-soft: #f7e7e4;
+  --good: #2f7a3e;
+  --band: rgba(31, 111, 120, 0.09);
+  --c-wm: #8a6d1f;
+  --c-gm: #5b5fa8;
+  --c-th: #2f7a3e;
+  --c-hi: #c0562a;
+  --c-am: #b0336c;
+  --font-display: "IBM Plex Serif", Georgia, serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171d; --surface: #1a2129; --ink: #e4e8ed; --muted: #9aa5b2; --rule: #2c3540;
+    --accent: #5fb7bf; --accent-soft: #1b3236; --bad: #e38a7e; --bad-soft: #3a2220; --good: #7cc58a;
+    --band: rgba(95, 183, 191, 0.12);
+    --c-wm: #d9b45a; --c-gm: #9da1ea; --c-th: #7cc58a; --c-hi: #f08c5c; --c-am: #ea7aae;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12171d; --surface: #1a2129; --ink: #e4e8ed; --muted: #9aa5b2; --rule: #2c3540;
+  --accent: #5fb7bf; --accent-soft: #1b3236; --bad: #e38a7e; --bad-soft: #3a2220; --good: #7cc58a;
+  --band: rgba(95, 183, 191, 0.12);
+  --c-wm: #d9b45a; --c-gm: #9da1ea; --c-th: #7cc58a; --c-hi: #f08c5c; --c-am: #ea7aae;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 16.5px; line-height: 1.6;
+}
+main { max-width: 980px; margin: 0 auto; padding: 48px 20px 80px; display: grid; gap: 40px; }
+.prose { max-width: 70ch; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; line-height: 1.25; margin: 0; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.45rem; padding-top: 8px; border-top: 1px solid var(--rule); padding-top: 28px; }
+h3 { font-size: 1.08rem; font-family: var(--font-body); font-weight: 600; }
+p { margin: 0; }
+section { display: grid; gap: 16px; }
+.meta { color: var(--muted); font-size: 0.92rem; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+
+header { display: grid; gap: 12px; }
+.hypothesis { font-family: var(--font-display); font-size: 1.2rem; color: var(--muted); }
+.hypothesis q { color: var(--ink); }
+
+.verdict {
+  background: var(--surface); border: 1px solid var(--rule); border-left: 5px solid var(--bad);
+  border-radius: 6px; padding: 20px 22px; display: grid; gap: 10px;
+}
+.pill {
+  display: inline-block; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 3px 10px; border-radius: 999px; background: var(--bad-soft); color: var(--bad); justify-self: start;
+}
+.verdict p:first-of-type { font-size: 1.12rem; font-weight: 500; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 2px; }
+.kpi .v { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 0.88rem; line-height: 1.4; }
+
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; min-width: 760px; }
+th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-weight: 600; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+th:first-child, td:first-child, th:nth-child(3), td:nth-child(3) { text-align: left; }
+td { font-variant-numeric: tabular-nums; }
+td.num { font-family: var(--font-mono); font-size: 0.86rem; }
+tr:last-child td { border-bottom: 0; }
+tr.key td { background: var(--accent-soft); }
+td .sub { color: var(--muted); font-size: 0.85em; }
+.best { font-weight: 600; color: var(--good); }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+@media (max-width: 480px) { .charts { grid-template-columns: 1fr; } }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 10px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+figcaption strong { color: var(--ink); font-weight: 600; }
+svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+.findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; counter-reset: f; }
+.findings li {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px 16px 58px;
+  position: relative; display: grid; gap: 6px; counter-increment: f;
+}
+.findings li::before {
+  content: counter(f); position: absolute; left: 18px; top: 15px; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 600; font-size: 0.9rem;
+  display: grid; place-items: center;
+}
+.findings .step { font-family: var(--font-mono); font-size: 0.82rem; color: var(--accent); }
+
+.conclusion {
+  background: var(--accent-soft); border-radius: 6px; padding: 20px 22px; display: grid; gap: 10px;
+  border-left: 5px solid var(--accent);
+}
+.conclusion p:first-child { font-family: var(--font-display); font-size: 1.18rem; font-weight: 500; }
+
+ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+pre { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.55; }
+footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--rule); padding-top: 18px; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <p class="meta">MIA Lab · group 03 · brain tissue segmentation with a random forest · results of 4 Nov 2026</p>
+  <h1>More features, better segmentation?</h1>
+  <p class="hypothesis">Hypothesis: <q>A larger amount of features improves the segmentation performance.</q></p>
+</header>
+
+<div class="verdict">
+  <span class="pill">Not supported</span>
+  <p>Performance does not rise with the number of features. It jumps once, when five label-prior features add <em>where</em> each structure usually lies, and then stays flat from 12 to 35 features.</p>
+  <p class="meta">Six feature sets with 5 to 35 features, 3 seeds each, 10 test subjects, Dice and 95th-percentile Hausdorff distance (HD95) per structure.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><span class="v">0.666 → 0.722</span><span class="l">mean Dice, 7 → 12 features (+ label prior): nearly the whole gain</span></div>
+  <div class="kpi"><span class="v">0.722 = 0.722</span><span class="l">mean Dice, 12 vs 35 features: no further gain</span></div>
+  <div class="kpi"><span class="v">11 s vs 79 s</span><span class="l">test pre-processing time, 12 vs 35 features, same Dice</span></div>
+</div>
+
+<section>
+  <h2>Setup</h2>
+  <div class="prose">
+    <p>All experiments use the same pipeline (registration to the atlas, skull stripping, z-score normalization) and the same random forest (50 trees, depth 20, √<i>n</i> features per split). Only the feature set changes. Each experiment ran with seeds 0, 1 and 2, trained on 20 subjects and was tested on the same 10 subjects. Values are means over the 10 test subjects (each first averaged over the 3 seeds), without post-processing. Differences between experiments were tested with a paired Wilcoxon signed-rank test per structure and metric.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Results</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Experiment</th><th>Features</th><th>Added information</th><th>Mean Dice</th><th>Hippocampus</th><th>Amygdala</th><th>Thalamus</th><th>Mean HD95 (mm)</th><th>Test pre-proc.</th></tr>
+      </thead>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+  <p class="meta">Dice: higher is better (1 = perfect overlap). HD95: lower is better. Std over test subjects: about 0.02 (hippocampus, thalamus) to 0.045 (amygdala) Dice. The std of the means between seeds is at most 0.014 Dice. The highlighted row is the smallest set that reaches the plateau.</p>
+
+  <div class="charts">
+    <figure>
+      <div class="legend" id="legend-dice"></div>
+      <svg id="chart-dice" viewBox="0 0 460 300" role="img" aria-label="Dice per structure for each feature set"></svg>
+      <figcaption><strong>Dice per structure.</strong> The shaded step (7 → 12 features) holds almost all of the improvement; the lines are flat after it.</figcaption>
+    </figure>
+    <figure>
+      <div class="legend" id="legend-hd"></div>
+      <svg id="chart-hd" viewBox="0 0 460 300" role="img" aria-label="HD95 per structure for each feature set"></svg>
+      <figcaption><strong>HD95 per structure (mm, lower is better).</strong> HD95 halves at the same step. Note the hippocampus spike at 29 features (<code>extended</code>).</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <h2>What the experiments show</h2>
+  <ol class="findings">
+    <li>
+      <span class="step">baseline → baseline_t2 · 5 → 7 features</span>
+      <h3>Adding features without new information does nothing</h3>
+      <p>The T2 intensity and gradient leave mean Dice unchanged (0.669 → 0.666) and make the hippocampus significantly worse (−0.024 Dice, +1.0 mm HD95, p = 0.002). After normalization T2 is close to a mirror image of T1 (Spearman r ≈ −0.92), so it adds little the forest does not already have.</p>
+    </li>
+    <li>
+      <span class="step">baseline_t2 → prior_only · 7 → 12 features</span>
+      <h3>Five label-prior features bring nearly the whole gain</h3>
+      <p>The label prior gives, for every voxel, the fraction of training subjects that have each structure there. Hippocampus Dice rises by 0.14, amygdala by 0.08, thalamus by 0.04, and HD95 of these three drops from 10–12.5 mm to 3.6–6.8 mm. All 10 subjects improve in every structure (p = 0.002, the smallest possible value with 10 subjects).</p>
+    </li>
+    <li>
+      <span class="step">prior_only → extended_plus · 12 → 35 features</span>
+      <h3>23 more features leave Dice unchanged</h3>
+      <p>Mean Dice is 0.722 for both. Some per-structure differences are statistically significant because they are consistent, but they are about 0.001 Dice, far too small to matter. The one real gain is in HD95 (amygdala 6.8 → 4.0 mm, hippocampus 5.2 → 4.2 mm), and it comes from a specific new kind of feature (distances to the brain border and to the typical structure regions), not from the count. In exchange, test pre-processing takes 7× longer.</p>
+    </li>
+    <li>
+      <span class="step">extended vs extended_plus · 29 vs 35 features</span>
+      <h3>More features is not even consistently better</h3>
+      <p>The 29-feature set has slightly <em>better</em> Dice than the 35-feature set (amygdala +0.017, hippocampus +0.014, p = 0.002), but its hippocampus HD95 is twice as high (8.9 vs 4.2 mm) in every subject and every seed. That points to scattered false-positive voxels far from the hippocampus, which the distance-to-hippocampus feature removes. Adding features traded one metric against the other.</p>
+    </li>
+    <li>
+      <span class="step">extended_plus → reduced · 35 → 25 features</span>
+      <h3>Removing 10 redundant features costs almost nothing</h3>
+      <p>The 10 features removed correlate with a more important one (|r| ≥ 0.9). Dice changes by at most ±0.009 per structure. Only amygdala HD95 gets worse (+1.7 mm), because <code>priordistance_amygdala</code> was among the removed features although it keeps amygdala outliers away.</p>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <h2>Why: information, not quantity</h2>
+  <div class="prose" style="display:grid;gap:14px">
+    <p>The baseline fails where intensity cannot decide. Hippocampus and amygdala have the same MRI intensity as grey matter, so a classifier that only sees intensity and gradient confuses them with the cortex next to them. What it lacks is location, and the label prior and distance features supply it. That is why the gain is large for the three small structures and small (+0.01 Dice) for white and grey matter, which intensity already separates well.</p>
+    <p>The feature analysis of the 35-feature run points the same way:</p>
+    <ul class="plain">
+      <li><strong>SHAP</strong> ranks distance to the brain border, distance to the typical hippocampus and thalamus regions, T1−T2 and the label priors at the top. All Laplacian-of-Gaussian scales, the coarsest smoothing and the left-right coordinate contribute almost nothing.</li>
+      <li><strong>Correlation</strong>: 10 of 35 features are redundant with a more important one (|r| ≥ 0.9). They raise the count without adding information.</li>
+      <li><strong>Boruta</strong> confirmed all 35 features, so none is pure noise. A random forest tolerates weak features well (each split picks the best of a random subset), so extra features rarely hurt, which can make "more features helped" look true when only a few did.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>Conclusion</h2>
+  <div class="conclusion">
+    <p>Features that add new information improve the segmentation; adding features in itself does not.</p>
+    <p>The improvement comes from anatomical location (label prior and distance features), mainly for hippocampus, amygdala and thalamus. Beyond about 12 well-chosen features, more features give diminishing returns: the metrics barely move, and the pre-processing time grows several-fold. A reformulated hypothesis for further work: <em>features that encode anatomical location improve the segmentation of subcortical structures more than additional intensity-derived features.</em></p>
+  </div>
+</section>
+
+<section>
+  <h2>Limitations</h2>
+  <ul class="plain prose">
+    <li>Only 10 test subjects. With 10 pairs, p = 0.002 means that all 10 subjects changed in the same direction; it says nothing about the size of the effect.</li>
+    <li>The forest settings were fixed for all feature sets and not tuned per set. A set with more features might profit from more trees or a different number of features per split.</li>
+    <li>The feature sets are nested and not random: the feature count and the kind of information change together. The 12-feature set with the prior and the 25-feature reduced set are what separates the two effects.</li>
+    <li>No post-processing was applied. It may remove some of the scattered voxels that drive HD95.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Reproduce</h2>
+  <pre>python run_experiment.py experiments/&lt;name&gt;.json --seeds 0 1 2   # baseline, baseline_t2, prior_only,
+                                                                 # extended, extended_plus, extended_plus_reduced_r09
+python aggregate_results.py --baseline baseline --plot
+python analyze_features.py all --experiment extended_plus --plot</pre>
+  <p class="meta">Branch <code>alejandro</code>. Results in <code>results/_aggregate/</code> (tables, Wilcoxon tests, boxplots) and <code>results/extended_plus/analysis/</code> (SHAP, Boruta, correlation).</p>
+</section>
+
+<footer>Generated from <code>results/_aggregate/summary_table.csv</code> and paired Wilcoxon tests on the per-subject means.</footer>
+</main>
+
+<script>
+const LABELS = [
+  { key: 'WhiteMatter', name: 'White matter', color: '--c-wm' },
+  { key: 'GreyMatter', name: 'Grey matter', color: '--c-gm' },
+  { key: 'Thalamus', name: 'Thalamus', color: '--c-th' },
+  { key: 'Hippocampus', name: 'Hippocampus', color: '--c-hi' },
+  { key: 'Amygdala', name: 'Amygdala', color: '--c-am' },
+];
+// mean over the 10 test subjects (seeds averaged per subject first), from results/_aggregate/summary_table.csv
+const EXPERIMENTS = [
+  { id: 'baseline', short: 'baseline', n: 5, added: 'coordinates, T1 intensity and gradient', test_s: 9.0,
+    dice: { Amygdala: 0.521, GreyMatter: 0.714, Hippocampus: 0.520, Thalamus: 0.765, WhiteMatter: 0.827 },
+    hd: { Amygdala: 11.732, GreyMatter: 2.279, Hippocampus: 11.489, Thalamus: 10.178, WhiteMatter: 2.405 } },
+  { id: 'baseline_t2', short: '+T2', n: 7, added: '+ T2 intensity and gradient', test_s: 9.0,
+    dice: { Amygdala: 0.531, GreyMatter: 0.716, Hippocampus: 0.496, Thalamus: 0.764, WhiteMatter: 0.823 },
+    hd: { Amygdala: 11.986, GreyMatter: 2.370, Hippocampus: 12.527, Thalamus: 9.689, WhiteMatter: 3.140 } },
+  { id: 'prior_only', short: '+prior', n: 12, added: '+ label prior (5 structures)', test_s: 11.1, key: true,
+    dice: { Amygdala: 0.612, GreyMatter: 0.725, Hippocampus: 0.634, Thalamus: 0.801, WhiteMatter: 0.837 },
+    hd: { Amygdala: 6.766, GreyMatter: 1.997, Hippocampus: 5.188, Thalamus: 3.582, WhiteMatter: 1.924 } },
+  { id: 'extended_plus_reduced_r09', short: 'reduced', n: 25, added: 'extended_plus minus 10 correlated', test_s: 38.5,
+    dice: { Amygdala: 0.621, GreyMatter: 0.720, Hippocampus: 0.625, Thalamus: 0.804, WhiteMatter: 0.839 },
+    hd: { Amygdala: 5.663, GreyMatter: 2.118, Hippocampus: 4.269, Thalamus: 3.270, WhiteMatter: 1.932 } },
+  { id: 'extended', short: 'extended', n: 29, added: '+ multi-scale, local stats, T1−T2', test_s: 44.1,
+    dice: { Amygdala: 0.629, GreyMatter: 0.724, Hippocampus: 0.647, Thalamus: 0.806, WhiteMatter: 0.838 },
+    hd: { Amygdala: 5.296, GreyMatter: 2.005, Hippocampus: 8.919, Thalamus: 3.601, WhiteMatter: 1.941 } },
+  { id: 'extended_plus', short: 'ext_plus', n: 35, added: '+ distances, prior distances, symmetry', test_s: 79.4,
+    dice: { Amygdala: 0.612, GreyMatter: 0.726, Hippocampus: 0.633, Thalamus: 0.802, WhiteMatter: 0.839 },
+    hd: { Amygdala: 3.988, GreyMatter: 2.054, Hippocampus: 4.206, Thalamus: 3.244, WhiteMatter: 1.941 } },
+];
+const mean = obj => Object.values(obj).reduce((a, b) => a + b, 0) / Object.values(obj).length;
+
+// table
+const best = (key, f, lowerIsBetter) => {
+  const vals = EXPERIMENTS.map(f);
+  return lowerIsBetter ? Math.min(...vals) : Math.max(...vals);
+};
+const bestDice = best('dice', e => +mean(e.dice).toFixed(3));
+const bestHd = best('hd', e => +mean(e.hd).toFixed(1), true);
+const fmt = (v, d) => v.toFixed(d);
+document.getElementById('results-body').innerHTML = EXPERIMENTS.map(e => {
+  const md = +mean(e.dice).toFixed(3), mh = +mean(e.hd).toFixed(1);
+  return `<tr${e.key ? ' class="key"' : ''}>
+    <td class="mono">${e.id}</td>
+    <td class="num">${e.n}</td>
+    <td>${e.added}</td>
+    <td class="num${md === bestDice ? ' best' : ''}">${fmt(md, 3)}</td>
+    <td class="num">${fmt(e.dice.Hippocampus, 3)}</td>
+    <td class="num">${fmt(e.dice.Amygdala, 3)}</td>
+    <td class="num">${fmt(e.dice.Thalamus, 3)}</td>
+    <td class="num${mh === bestHd ? ' best' : ''}">${fmt(mh, 1)}</td>
+    <td class="num">${fmt(e.test_s, 0)} s</td>
+  </tr>`;
+}).join('');
+
+// charts
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, text) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function legend(id) {
+  document.getElementById(id).innerHTML = LABELS
+    .map(l => `<span><i style="background:var(${l.color})"></i>${l.name}</span>`).join('');
+}
+function chart(id, field, yMin, yMax, ticks, decimals) {
+  const svg = document.getElementById(id);
+  svg.innerHTML = '';
+  const W = 460, H = 300, m = { l: 44, r: 14, t: 12, b: 50 };
+  const x = i => m.l + (i + 0.5) * (W - m.l - m.r) / EXPERIMENTS.length;
+  const y = v => m.t + (yMax - v) / (yMax - yMin) * (H - m.t - m.b);
+  const ink = css('--ink'), muted = css('--muted'), rule = css('--rule');
+  // the 7 -> 12 step
+  const step = (W - m.l - m.r) / EXPERIMENTS.length;
+  svg.appendChild(el('rect', { x: x(1), y: m.t, width: step, height: H - m.t - m.b, fill: css('--band') }));
+  for (const t of ticks) {
+    svg.appendChild(el('line', { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), stroke: rule, 'stroke-width': 1 }));
+    svg.appendChild(el('text', { x: m.l - 6, y: y(t) + 4, 'text-anchor': 'end', 'font-size': 11, fill: muted,
+      'font-family': 'IBM Plex Mono, monospace' }, t.toFixed(decimals)));
+  }
+  EXPERIMENTS.forEach((e, i) => {
+    svg.appendChild(el('text', { x: x(i), y: H - m.b + 18, 'text-anchor': 'middle', 'font-size': 11, fill: ink,
+      'font-family': 'IBM Plex Sans, sans-serif' }, e.short));
+    svg.appendChild(el('text', { x: x(i), y: H - m.b + 33, 'text-anchor': 'middle', 'font-size': 10.5, fill: muted,
+      'font-family': 'IBM Plex Mono, monospace' }, `${e.n} f.`));
+  });
+  for (const l of LABELS) {
+    const color = css(l.color);
+    const pts = EXPERIMENTS.map((e, i) => `${x(i)},${y(e[field][l.key])}`).join(' ');
+    svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+    EXPERIMENTS.forEach((e, i) => {
+      const dot = el('circle', { cx: x(i), cy: y(e[field][l.key]), r: 3.4, fill: color, stroke: css('--surface'), 'stroke-width': 1.2 });
+      dot.appendChild(el('title', {}, `${l.name}, ${e.id}: ${e[field][l.key].toFixed(field === 'dice' ? 3 : 1)}`));
+      svg.appendChild(dot);
+    });
+  }
+}
+function draw() {
+  chart('chart-dice', 'dice', 0.45, 0.85, [0.45, 0.55, 0.65, 0.75, 0.85], 2);
+  chart('chart-hd', 'hd', 0, 14, [0, 2, 4, 6, 8, 10, 12, 14], 0);
+}
+legend('legend-dice'); legend('legend-hd');
+draw();
+// redraw with the other palette when the theme changes
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>
+</body>
+</html>
