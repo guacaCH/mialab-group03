@@ -1,0 +1,11 @@
+{
+  "description": "extended_plus without the label prior and the distances to the typical subcortical regions, i.e. without any atlas prior information (27 features)",
+  "pre_process": {
+    "features": "extended_plus",
+    "exclude_features": ["family=prior", "family=priordistance"]
+  },
+  "forest": {
+    "n_estimators": 50,
+    "max_depth": 20
+  }
+}
