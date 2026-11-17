@@ -9,9 +9,15 @@ stay as they are (also works with --noise):
     python extract_features.py --features extended        # multi-scale, local statistics, T1-T2, label prior
     python extract_features.py --features extended_plus   # + brain-border distance, prior distance, symmetry
 Both add the random noise control. --extended is short for --features extended.
+For several seeds of the training voxels (the same sampling as run_experiment.py --seeds 0 1 2):
+    python extract_features.py --features extended_plus --seeds 0 1 2
+    python extract_features.py --features extended_plus --seeds 1 2 --train_only   # add seeds to an existing cache
+The feature images are taken from (and stored in) the same feature cache as run_experiment.py, so every further
+seed only costs the loading and the voxel sampling, not the feature computation.
 
 Writes to features/ (features_<set>/ for the larger sets, not committed to git):
-    train.npz             X (sampled training voxels x features), y (labels), subject, feature_names
+    train.npz             X (sampled training voxels x features), y (labels), subject, feature_names (seed 0)
+    train_seed<s>.npz     the same for the other seeds (--seeds), see train_path()
     test_<subject>.npz    X, y of all voxels inside the brain mask, brain_index (their position in the image)
     noise_<std>/test_<subject>.npz   the same with noise (with --noise)
 """
@@ -53,7 +59,12 @@ FEATURE_SETS = {'baseline_t2': (['baseline_t2'], 'features'),
                 'extended': (['extended', 'control_random'], 'features_extended'),
                 'extended_plus': (['extended_plus', 'control_random'], 'features_extended_plus')}
 
-SEED = 0  # fixes the random choice of training voxels
+DEFAULT_SEEDS = [0]  # the seed fixes the random choice of training voxels (np.random.seed, as in run_experiment.py)
+
+
+def train_path(output_dir: str, seed: int) -> str:
+    """The training file of one seed. Seed 0 keeps the old name train.npz, so older scripts still find it."""
+    return os.path.join(output_dir, 'train.npz' if seed == 0 else f'train_seed{seed}.npz')
 
 
 def crawl(data_dir: str) -> dict:
@@ -82,27 +93,39 @@ def save_test_subject(img: structure.BrainImage, path: str):
     np.savez(path, X=x[brain], y=y[brain], brain_index=np.flatnonzero(brain), feature_names=img.feature_names)
 
 
-def main(output_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_dir: str, noise: list, features: str):
+def main(output_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_dir: str, noise: list, features: str,
+         seeds: list = DEFAULT_SEEDS, train_only: bool = False, feature_cache_dir: str = None):
     putil.load_atlas_images(data_atlas_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    params = dict(PRE_PROCESS_PARAMS, features=FEATURE_SETS[features][0])
+    # feature_cache_dir: the cached feature images of run_experiment.py (None = compute everything). With the cache,
+    # a further seed only loads the feature images again and samples other voxels.
+    params = dict(PRE_PROCESS_PARAMS, features=FEATURE_SETS[features][0], feature_cache_dir=feature_cache_dir)
     if any(column['family'] in fpool.PRIOR_FAMILIES for column in fpool.select_columns(params['features'])):
         # the label prior is built from the training subjects only, so no test label is used
         fpool.LABEL_PRIOR.clear()
         fpool.LABEL_PRIOR.update(fpool.build_label_prior(registered_ground_truths(crawl(data_train_dir))))
 
     if not noise:
-        # training subjects: only the randomly sampled training voxels
-        np.random.seed(SEED)
-        images = putil.pre_process_batch(crawl(data_train_dir), dict(params, training=True),
-                                         multi_process=False)
-        np.savez(os.path.join(output_dir, 'train.npz'),
-                 X=np.concatenate([img.feature_matrix[0] for img in images]),
-                 y=np.concatenate([img.feature_matrix[1] for img in images]).ravel(),
-                 subject=np.concatenate([[img.id_] * len(img.feature_matrix[1]) for img in images]),
-                 feature_names=images[0].feature_names)
-        del images
+        # training subjects: only the randomly sampled training voxels, once per seed.
+        # np.random.seed(seed) right before pre_process_batch, exactly like run_experiment.py, so seed s gives the
+        # same training voxels as results/<experiment>/seed_<s>/ (no feature uses np.random, the control has its own)
+        for seed in seeds:
+            print(f'training voxels of seed {seed}')
+            np.random.seed(seed)
+            images = putil.pre_process_batch(crawl(data_train_dir), dict(params, training=True),
+                                             multi_process=False)
+            np.savez(train_path(output_dir, seed),
+                     X=np.concatenate([img.feature_matrix[0] for img in images]),
+                     y=np.concatenate([img.feature_matrix[1] for img in images]).ravel(),
+                     subject=np.concatenate([[img.id_] * len(img.feature_matrix[1]) for img in images]),
+                     feature_names=images[0].feature_names)
+            del images
+
+    if train_only:
+        # the test features don't depend on the seed: adding seeds needs no new test files
+        print('features written to', output_dir)
+        return
 
     # test subjects: all voxels inside the brain mask, one file per subject to keep the memory low
     for noise_std in noise or [0]:
@@ -126,7 +149,15 @@ if __name__ == '__main__':
                         help='noise standard deviations; only the test subjects are written')
     parser.add_argument('--features', choices=FEATURE_SETS, default='baseline_t2', help='the feature set')
     parser.add_argument('--extended', action='store_true', help='short for --features extended')
+    parser.add_argument('--seeds', type=int, nargs='+', default=DEFAULT_SEEDS,
+                        help='seeds of the training voxel sampling, e.g. 0 1 2 (one training file per seed)')
+    parser.add_argument('--train_only', action='store_true',
+                        help='only the training files, e.g. to add seeds to an existing cache')
+    parser.add_argument('--feature_cache', default=os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])),
+                                                                 'feature_cache'),
+                        help='feature cache directory (shared with run_experiment.py), "none" to disable it')
     args = parser.parse_args()
     features = 'extended' if args.extended else args.features
     output_dir = args.output_dir or os.path.normpath(os.path.join(script_dir, FEATURE_SETS[features][1]))
-    main(output_dir, args.data_atlas_dir, args.data_train_dir, args.data_test_dir, args.noise, features)
+    main(output_dir, args.data_atlas_dir, args.data_train_dir, args.data_test_dir, args.noise, features,
+         args.seeds, args.train_only, None if args.feature_cache.lower() == 'none' else args.feature_cache)
