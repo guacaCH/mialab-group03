@@ -12,7 +12,7 @@ Step 0, once (about 20-30 min, about 2.7 GB in features_extended_plus/):
 The experiments (each one is a subcommand, writes to results/cheap/<subcommand>/ and prints its report at the end):
     python cheap_experiments.py check                 # all 35 columns = extended_plus; the 3 seeds give the noise floor
     python cheap_experiments.py subsets               # exp. 1: random image subsets at fixed k, without / with location
-    python cheap_experiments.py noise                 # exp. 2: extended (29) + 29 / 100 pure-noise columns
+    python cheap_experiments.py noise                 # exp. 2: all 35 features + 35 / 100 pure-noise columns
     python cheap_experiments.py groups                # exp. 3: T1 only, image only, location only, image + location
     python cheap_experiments.py ablation              # exp. 4: extended_plus without one family at a time (and without T2)
     python cheap_experiments.py permutation           # grouped permutation importance of the 35-feature forest
@@ -29,13 +29,18 @@ So 3 seeds take 3 times as long as one; --seeds 0 gives a quick first look.
 Output of the forest experiments (check, subsets, noise, groups, ablation), in results/cheap/<subcommand>/:
     runs.csv       one row per forest: name, seed, the feature columns, timings
     metrics.csv    one row per forest x subject x label x metric (DICE, HDRFDST95), like run_experiment.py
+    predictions/   <name>_seed<s>.npz: the predicted labels of the brain voxels of every forest (reused by flip_maps.py)
     effects.csv    (noise, groups, ablation) the difference to the reference run per structure and metric, with a
-                   95 % bootstrap confidence interval over the test subjects and a "relevant" flag
+                   95 % two-level bootstrap confidence interval (subjects AND seeds), the mean of every seed, and the
+                   flags relevant / negligible / seeds_agree
     *.png          the plot of the report
 
 How the effects are judged (see "Which evaluations to add" in the plan doc):
     * mean_diff = run - reference, per test subject first (seeds averaged), then the mean over the subjects.
-    * ci_low, ci_high: 95 % bootstrap confidence interval of mean_diff (10,000 resamples of the subjects).
+    * ci_low, ci_high: 95 % bootstrap confidence interval of mean_diff (10,000 resamples of the subjects AND the
+      seeds, so both the choice of test patients and the training randomness are in it, see bootstrap_ci).
+    * negligible = the whole interval lies inside +- the minimal relevant difference (equivalence: "redundant given
+      the other features"); seeds_agree = every seed alone gives the same sign.
     * relevant = the whole interval lies beyond the minimal relevant difference (--min_dice 0.01, --min_hd 1 mm).
       With 10 subjects this replaces the Wilcoxon p-value, which can't go below 0.002 and ignores the size.
     * The noise floor (check): how much the mean Dice of the SAME columns moves between the seeds. Every seed has its
@@ -173,8 +178,12 @@ def noise_columns(n_rows: int, n_noise: int, key: int) -> np.ndarray:
 # =================================================================================================================
 # One forest: fit on some columns, predict the test subjects, evaluate Dice and HD95
 # =================================================================================================================
-def run_forest(data: Data, columns: list, seed: int, n_noise: int = 0) -> tuple:
+def run_forest(data: Data, columns: list, seed: int, n_noise: int = 0, save_path: str = None) -> tuple:
     """Trains the fixed forest on the given columns (+ n_noise noise columns) and evaluates it on all test subjects.
+
+    save_path: if given, the predicted labels of the brain voxels of every test subject are saved there
+               (npz, one uint8 array per subject, ~3 MB compressed per forest). Voxel-level analyses such as
+               flip_maps.py then reuse them instead of training the forest again.
 
     Returns:
         rows (list of dict): subject, label, metric, value
@@ -193,6 +202,7 @@ def run_forest(data: Data, columns: list, seed: int, n_noise: int = 0) -> tuple:
     del x_train
 
     evaluator = putil.init_evaluator()                            # Dice + HD95 for the 5 structures
+    predictions = {}
     t0 = timeit.default_timer()
     for i, (subject, test) in enumerate(data.tests.items(), 1):
         x_test = test['X'][:, idx]
@@ -200,11 +210,20 @@ def run_forest(data: Data, columns: list, seed: int, n_noise: int = 0) -> tuple:
             x_test = np.hstack([x_test, noise_columns(len(x_test), n_noise, key=i)])  # other noise per subject
         prediction = forest.predict(x_test).astype(np.uint8)
         evaluator.evaluate(to_image(prediction, test['brain_index']), data.ground_truths[subject], subject)
+        predictions[subject] = prediction
         del x_test
     t_predict = timeit.default_timer() - t0
 
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        np.savez_compressed(save_path, **predictions)
     rows = [{'subject': r.id_, 'label': r.label, 'metric': r.metric, 'value': r.value} for r in evaluator.results]
     return rows, {'fit_s': round(t_fit, 1), 'predict_s': round(t_predict, 1)}
+
+
+def prediction_path(out_dir: str, name: str, seed: int) -> str:
+    """Where the predicted labels of one forest are kept: results/cheap/<experiment>/predictions/<name>_seed<s>.npz"""
+    return os.path.join(out_dir, 'predictions', f'{name}_seed{seed}.npz')
 
 
 def run_all(data: Data, runs: list, out_dir: str):
@@ -224,7 +243,9 @@ def run_all(data: Data, runs: list, out_dir: str):
     for i, run in enumerate(todo, 1):
         n_features = len(run['columns']) + run.get('n_noise', 0)
         print(f'[{i}/{len(todo)}] {run["name"]} (seed {run["seed"]}): {n_features} features')
-        rows, timing = run_forest(data, run['columns'], run['seed'], run.get('n_noise', 0))
+        # predictions/<name>_seed<s>.npz: kept for voxel-level analyses (flip_maps.py), see run_forest
+        rows, timing = run_forest(data, run['columns'], run['seed'], run.get('n_noise', 0),
+                                  save_path=prediction_path(out_dir, run['name'], run['seed']))
 
         tags = {k: v for k, v in run.items() if k != 'columns'}
         tags['n_features'] = n_features
@@ -251,51 +272,88 @@ def load_metrics(out_dir: str) -> pd.DataFrame:
 # Statistics: effect size with a bootstrap confidence interval (replaces "p = 0.002")
 # =================================================================================================================
 def bootstrap_ci(diff: np.ndarray, n_boot: int = 10_000, seed: int = 0) -> tuple:
-    """Mean of the paired differences and its 95 % bootstrap confidence interval.
+    """Mean of the paired differences and its 95 % TWO-LEVEL bootstrap confidence interval.
 
-    diff: one value per test subject (run minus reference, seeds averaged first).
+    diff: table of paired differences, shape (n_subjects, n_seeds): run minus reference for the same subject and
+          the same seed (same seed = same training voxels for both runs, so the pairing removes part of the noise).
+          A 1-D array is treated as one seed (then this is the plain subject bootstrap).
+
+    Why two levels: the result varies for two reasons, (1) which patients are in the test set and (2) the
+    randomness of training (which voxels were sampled, the bootstrap rows and split features of every tree).
+    Resampling only the subjects (the old version: seeds averaged first) shows (1) only, so the interval was too
+    narrow. Here every resample draws n_subjects subjects AND n_seeds seeds with replacement and takes the mean of
+    that sub-table, so both sources of variation are in the interval.
+
+    Example: diff has 10 subjects x 3 seeds. One resample might take subjects (3, 3, 7, 0, ...) and seeds (1, 1, 2):
+    the mean of those 10 x 3 cells is one bootstrap mean. Repeated 10,000 times, the middle 95 % of the means is the
+    interval. Caveat: with only 3 seeds the seed level is rough (only 10 different seed draws exist); 5 are better.
     """
-    rng = np.random.default_rng(seed)                   # own generator, reproducible
-    # n_boot resamples of the subjects, with replacement: shape (n_boot, n_subjects)
-    samples = rng.choice(diff, size=(n_boot, len(diff)), replace=True)
-    means = samples.mean(axis=1)                        # the mean difference of every resample
-    low, high = np.percentile(means, [2.5, 97.5])       # the middle 95 % of those means
+    diff = np.asarray(diff, dtype=float)
+    if diff.ndim == 1:
+        diff = diff[:, None]
+    n_subjects, n_seeds = diff.shape
+    rng = np.random.default_rng(seed)                                    # own generator, reproducible
+    subjects = rng.integers(0, n_subjects, size=(n_boot, n_subjects))   # resampled subject indices per resample
+    seeds = rng.integers(0, n_seeds, size=(n_boot, n_seeds))            # resampled seed indices per resample
+    # diff[subjects]: (n_boot, n_subjects, n_seeds); then keep the resampled seeds (columns) of every resample
+    picked = np.take_along_axis(diff[subjects], np.repeat(seeds[:, None, :], n_subjects, axis=1), axis=2)
+    means = picked.mean(axis=(1, 2))                                     # the mean difference of every resample
+    low, high = np.percentile(means, [2.5, 97.5])                        # the middle 95 % of those means
     return float(diff.mean()), float(low), float(high)
 
 
 def effects(metrics: pd.DataFrame, reference: str, min_dice: float, min_hd: float) -> pd.DataFrame:
     """The difference of every run to the reference run, per structure and metric, with its bootstrap CI.
 
-    relevant: the whole confidence interval lies beyond the minimal relevant difference, in either direction.
-    better:   the mean difference points in the good direction (higher Dice, lower HD95).
+    ci_low, ci_high: two-level bootstrap over subjects AND seeds (see bootstrap_ci).
+    seed_diffs:      the mean difference of every seed on its own (mean over the subjects), e.g. "+0.016 +0.028 +0.019"
+    seeds_agree:     all seeds give the same sign (a simple check to show next to the interval)
+    relevant:        the whole interval lies beyond the minimal relevant difference, in either direction
+                     (a real effect, larger than what matters)
+    negligible:      the whole interval lies INSIDE +- the minimal relevant difference (equivalence: as good as the
+                     reference; for an ablation: the family is redundant GIVEN the other features, not useless)
+    better:          the mean difference points in the good direction (higher Dice, lower HD95)
     """
-    # seeds averaged per subject first, so every subject counts once
-    per_subject = metrics.groupby(['name', 'label', 'metric', 'subject'])['value'].mean().reset_index()
-    base = per_subject[per_subject.name == reference]
-    if base.empty:
+    # one value per run x structure x metric x subject x seed
+    values = metrics.groupby(['name', 'label', 'metric', 'subject', 'seed'])['value'].mean()
+    if reference not in values.index.get_level_values('name'):
         raise SystemExit(f'the reference run "{reference}" is not finished yet')
+    base = values.xs(reference, level='name')
     rows = []
-    for name in [n for n in per_subject.name.unique() if n != reference]:
-        paired = base.merge(per_subject[per_subject.name == name], on=['label', 'metric', 'subject'],
-                            suffixes=('_ref', '_run'))
-        for (label, metric), g in paired.groupby(['label', 'metric']):
-            mean, low, high = bootstrap_ci((g.value_run - g.value_ref).values)
+    # runs in the order they were planned (= first appearance in metrics.csv), not alphabetically
+    for name in [n for n in dict.fromkeys(metrics.name) if n != reference]:
+        # paired by subject AND seed: the same seed means the same training voxels for both runs
+        diff = (values.xs(name, level='name') - base).dropna()
+        for (label, metric), g in diff.groupby(level=['label', 'metric']):
+            table = g.droplevel(['label', 'metric']).unstack('seed').dropna(axis=1)   # subjects x seeds
+            mean, low, high = bootstrap_ci(table.values)
+            per_seed = table.mean(axis=0)                                # mean over the subjects, one per seed
             threshold = min_hd if metric in LOWER_IS_BETTER else min_dice
             rows.append({'run': name, 'reference': reference, 'label': label, 'metric': metric,
-                         'n_subjects': len(g), 'mean_diff': mean, 'ci_low': low, 'ci_high': high,
+                         'n_subjects': table.shape[0], 'n_seeds': table.shape[1],
+                         'mean_diff': mean, 'ci_low': low, 'ci_high': high,
+                         'seed_diffs': ' '.join(f'{v:+.4f}' for v in per_seed),
+                         'seeds_agree': bool((per_seed > 0).all() or (per_seed < 0).all()),
                          'relevant': bool(low > threshold or high < -threshold),
+                         'negligible': bool(low > -threshold and high < threshold),
                          'better': bool(mean < 0 if metric in LOWER_IS_BETTER else mean > 0)})
     return pd.DataFrame(rows)
 
 
 def print_effects(table: pd.DataFrame, metric: str = 'DICE'):
-    """One line per run: mean difference [CI] per structure; * = relevant."""
+    """One line per run: mean difference [CI] per structure.
+
+    Marks: * = relevant (real effect beyond the threshold), = = negligible (whole CI inside +-threshold),
+           ? = the seeds disagree in sign (the mean is not stable over training runs).
+    """
     view = table[table.metric == metric].copy()
+    mark = pd.Series(np.where(view.relevant, ' *', np.where(view.negligible, ' =', '')), index=view.index) + \
+        pd.Series(np.where(view.seeds_agree, '', '?'), index=view.index)
     view['effect'] = (view.mean_diff.map('{:+.3f}'.format) + ' [' + view.ci_low.map('{:+.3f}'.format) + ', '
-                      + view.ci_high.map('{:+.3f}'.format) + ']' + view.relevant.map({True: ' *', False: ''}))
+                      + view.ci_high.map('{:+.3f}'.format) + ']' + mark)
     pivot = view.pivot(index='run', columns='label', values='effect')[[c for c in LABELS if c in set(view.label)]]
-    print(f'\n{METRICS[metric]} difference to "{table.reference.iloc[0]}", mean [95 % CI] over the test subjects, '
-          f'* = relevant')
+    print(f'\n{METRICS[metric]} difference to "{table.reference.iloc[0]}", mean [95 % CI over subjects AND seeds], '
+          f'* = relevant, = = negligible, ? = seeds disagree in sign')
     print(pivot.to_string())
 
 
@@ -337,34 +395,106 @@ def heatmap(table: pd.DataFrame, path: str, title: str, fmt: str = '{:.3f}', div
     print('plot:', path)
 
 
-def effect_plot(table: pd.DataFrame, path: str, title: str, metric: str = 'DICE', threshold: float = 0.01):
-    """One panel per structure: mean difference to the reference with its 95 % CI, the relevance band in grey."""
+# readable row names for the effect plots (run name -> label on the slide); unknown names are shown as they are
+RUN_TITLES = {
+    'no_T2': 'remove all T2 features', 'no_combination': 'remove T1 - T2', 'no_distance': 'remove brain-border distance',
+    'no_gradient': 'remove gradients', 'no_intensity': 'remove intensities', 'no_localstats': 'remove local statistics',
+    'no_log': 'remove LoG filters', 'no_prior': 'remove label prior', 'no_priordistance': 'remove prior distances',
+    'no_smoothing': 'remove Gaussian smoothing', 'no_spatial': 'remove coordinates', 'no_symmetry': 'remove symmetry',
+    'extended+29noise': '+ 29 noise columns', 'extended+100noise': '+ 100 noise columns',
+    'all35+35noise': '+ 35 noise columns', 'all35+100noise': '+ 100 noise columns',
+    'all35': 'all 35 features', 'extended': 'the 29 extended features',
+}
+# verdict -> colour (the meaning of each colour is in the legend of the plot)
+VERDICTS = {'worse': ('clearly worse', '#d0453a'), 'better': ('clearly better', '#2a78d6'),
+            'small': ('real, about the threshold', '#e3a33b'),
+            'negligible': ('negligible', '#4a5463'), 'unclear': ('unclear', '#b3bcc8')}
+
+
+def verdict(row, metric: str) -> str:
+    """The verdict of one effect, from its 95 % CI [low, high] and the threshold t (minimal relevant difference):
+
+    worse / better: the whole CI is beyond t (a real effect that is large enough to matter)
+    negligible:     the whole CI is inside [-t, t] (any effect is too small to matter)
+    small:          the CI excludes 0 but crosses t (the effect is real, its size is around t)
+                    e.g. +0.014 [+0.008, +0.020] with t = 0.01: surely positive, maybe just under 0.01
+    unclear:        the CI includes 0 and crosses t (we can't tell)
+    """
+    if row.relevant:
+        good = row.mean_diff < 0 if metric in LOWER_IS_BETTER else row.mean_diff > 0
+        return 'better' if good else 'worse'
+    if row.negligible:
+        return 'negligible'
+    return 'small' if row.ci_low > 0 or row.ci_high < 0 else 'unclear'
+
+
+def effect_plot(table: pd.DataFrame, path: str, title: str, metric: str = 'DICE', threshold: float = 0.01,
+                drop_negligible: bool = False):
+    """One panel per structure: difference to the reference with its 95 % CI (subjects and seeds) and every seed.
+
+    For SMALL effects (ablation, noise); large effects belong in an absolute plot (groups_plot).
+    drop_negligible: leave out the runs that are negligible in EVERY structure (a note under the plot names them),
+    so the slide shows only the runs that tell something.
+    Reading: bar = 95 % CI, big dot = mean, small open dots = the single seeds, grey band = +- threshold
+    (differences inside it are too small to matter). The colour is the verdict (see VERDICTS); all panels share the
+    x axis, so the structures are comparable.
+    """
     plt = _plt()
-    view = table[table.metric == metric]
+    from matplotlib.lines import Line2D
+    view = table[table.metric == metric].copy()
+    view['verdict'] = [verdict(r, metric) for r in view.itertuples()]
     runs = list(dict.fromkeys(view.run))
+    dropped = []
+    if drop_negligible:
+        dropped = [r for r in runs if (view[view.run == r].verdict == 'negligible').all()]
+        runs = [r for r in runs if r not in dropped]
     labels = [label for label in LABELS if label in set(view.label)]
-    fig, axes = plt.subplots(1, len(labels), figsize=(2.9 * len(labels) + 1.5, 0.45 * len(runs) + 1.6), sharey=True)
+    shown = view[view.run.isin(runs)]
+    limit = 1.12 * max(np.abs(shown[['ci_low', 'ci_high']].values).max(), 1.5 * threshold)
+
+    fig, axes = plt.subplots(1, len(labels), figsize=(2.7 * len(labels) + 2.4, 0.6 * len(runs) + 2.7),
+                             sharey=True, sharex=True)
     for ax, label in zip(np.atleast_1d(axes), labels):
         g = view[view.label == label].set_index('run').reindex(runs)
-        y = np.arange(len(runs))
-        ax.axvspan(-threshold, threshold, color='#eceff3', zorder=0)   # differences too small to matter
-        ax.axvline(0, color='#9aa5b5', lw=1)
-        colors = ['#2a78d6' if r else '#9fb7d6' for r in g.relevant]
-        ax.errorbar(g.mean_diff, y, xerr=[g.mean_diff - g.ci_low, g.ci_high - g.mean_diff], fmt='none',
-                    ecolor='#5d6878', elinewidth=1.2, capsize=3, zorder=2)
-        ax.scatter(g.mean_diff, y, color=colors, s=40, zorder=3)
-        ax.set_title(label, fontsize=10)
+        ax.axvspan(-threshold, threshold, color='#e9ecf1', zorder=0)    # differences too small to matter
+        ax.axvline(0, color='#8b95a5', lw=0.9, zorder=1)
+        for yi, row in enumerate(g.itertuples()):
+            color = VERDICTS[row.verdict][1]
+            ax.plot([row.ci_low, row.ci_high], [yi, yi], color=color, lw=3, solid_capstyle='round', zorder=2)
+            ax.scatter(row.mean_diff, yi, color=color, s=60, zorder=3, edgecolors='white', linewidths=1.2)
+            seeds = [float(v) for v in row.seed_diffs.split()]
+            ax.scatter(seeds, [yi + 0.28] * len(seeds), facecolors='none', edgecolors='#5d6878', s=18, lw=0.8,
+                       zorder=4)                                       # the seeds just below the bar
+        ax.set_xlim(-limit, limit)
+        ax.set_title(label, fontsize=11)
         ax.spines[['top', 'right', 'left']].set_visible(False)
         ax.tick_params(axis='y', length=0)
+        ax.tick_params(axis='x', labelsize=8.5)
+        ax.grid(axis='x', color='#f0f2f5', lw=0.6, zorder=0)
     first = np.atleast_1d(axes)[0]
     first.set_yticks(np.arange(len(runs)))
-    first.set_yticklabels(runs)
-    first.invert_yaxis()
-    fig.supxlabel(f'{METRICS[metric]} difference to "{view.reference.iloc[0]}" (95 % CI; grey = within ±{threshold})',
-                  fontsize=10)
-    fig.suptitle(title, fontsize=11, x=0.01, ha='left')
-    fig.tight_layout()
-    fig.savefig(path, dpi=200)
+    first.set_yticklabels([RUN_TITLES.get(r, r) for r in runs], fontsize=10)
+    first.set_ylim(len(runs) - 0.4, -0.6)                              # first run on top, room for the seed dots
+
+    unit = 'Dice' if metric == 'DICE' else 'HD95 (mm)'
+    reference = RUN_TITLES.get(view.reference.iloc[0], view.reference.iloc[0])
+    height = fig.get_figheight()                                     # bottom rows placed in inches, not fractions
+    fig.supxlabel(f'{unit} difference to {reference}', fontsize=10, y=0.6 / height, va='bottom')
+    handles = [Line2D([], [], color=c, lw=3, marker='o', markersize=7, markeredgecolor='white', label=n)
+               for n, c in VERDICTS.values()]
+    handles += [Line2D([], [], color='none', marker='o', markerfacecolor='none', markeredgecolor='#5d6878',
+                       markersize=5, label='single seeds'),
+                plt.Rectangle((0, 0), 1, 1, color='#e9ecf1', label=f'±{threshold:g}: too small to matter')]
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles), frameon=False, fontsize=9,
+               bbox_to_anchor=(0.5, 0.26 / height))
+    note = f'bar = 95 % confidence interval over test subjects and seeds'
+    if dropped:
+        note += ';  not shown (too small to matter in every structure): ' + \
+                ', '.join(RUN_TITLES.get(r, r).replace('remove ', '') for r in dropped)
+    fig.text(0.5, 0.08 / height, note, fontsize=8, color='#5d6878', ha='center')
+    fig.suptitle(title, fontsize=12, x=0.01, ha='left')
+    fig.tight_layout(rect=(0, 0.85 / height, 1, 1))
+    fig.savefig(path, dpi=200, facecolor='white')
     plt.close(fig)
     print('plot:', path)
 
@@ -474,16 +604,25 @@ def report_subsets(out_dir: str, args):
 
 
 def plan_noise(data: Data, args) -> list:
-    """Exp. 2: 'extended' (29 features) without and with m pure-noise columns: the count rises, the information not."""
-    extended = data.columns_of_set('extended')
-    runs = [{'name': 'extended', 'seed': s, 'n_noise': 0, 'columns': extended} for s in args.seeds]
+    """Exp. 2: all 35 features without and with m pure-noise columns: the count rises, the information does not.
+
+    The reference is all35, the same as in every other experiment (until 2026-11-24 it was 'extended' with 29
+    features; those results are kept in results/cheap/noise_extended29/). Default m = 35 (doubles the feature count)
+    and 100 (almost 4x).
+    """
+    runs = [{'name': REFERENCE, 'seed': s, 'n_noise': 0, 'columns': data.all_features} for s in args.seeds]
     for m in args.n_noise:
-        runs += [{'name': f'extended+{m}noise', 'seed': s, 'n_noise': m, 'columns': extended} for s in args.seeds]
+        runs += [{'name': f'{REFERENCE}+{m}noise', 'seed': s, 'n_noise': m, 'columns': data.all_features}
+                 for s in args.seeds]
     return runs
 
 
-def report_effects(out_dir: str, args, reference: str, title: str):
-    """For noise, groups and ablation: the effect of every run against the reference, table + plot."""
+def report_effects(out_dir: str, args, reference: str, title: str, plot: bool = True,
+                   drop_negligible: bool = False):
+    """For noise, groups and ablation: the effect of every run against the reference, table + plot.
+
+    plot=False: only the tables (for experiments whose effects are too large for a difference plot, see groups).
+    """
     metrics = load_metrics(out_dir)
     print(f'\nMean Dice over the test subjects')
     print(mean_table(metrics).to_string(float_format=lambda v: f'{v:.3f}'))
@@ -491,8 +630,11 @@ def report_effects(out_dir: str, args, reference: str, title: str):
     table.to_csv(os.path.join(out_dir, 'effects.csv'), index=False)
     print_effects(table, 'DICE')
     print_effects(table, 'HDRFDST95')
-    effect_plot(table, os.path.join(out_dir, 'effects_dice.png'), title, 'DICE', args.min_dice)
-    effect_plot(table, os.path.join(out_dir, 'effects_hd95.png'), title, 'HDRFDST95', args.min_hd)
+    if plot:
+        effect_plot(table, os.path.join(out_dir, 'effects_dice.png'), title, 'DICE', args.min_dice,
+                    drop_negligible)
+        effect_plot(table, os.path.join(out_dir, 'effects_hd95.png'), title, 'HDRFDST95', args.min_hd,
+                    drop_negligible)
     return metrics, table
 
 
@@ -504,11 +646,69 @@ def plan_groups(data: Data, args) -> list:
     return [{'name': name, 'seed': s, 'columns': columns} for name, columns in sets.items() for s in args.seeds]
 
 
+# the feature sets of the groups experiment: run name -> (label on the plot, colour = kind of information)
+# blue = image information only, orange = location information only, green = both. Colours of the validated
+# default categorical palette (slots 1-3); T1 only is a lighter blue because it is a subset of "image".
+GROUP_SETS = {'T1_intensity': ('T1 intensity only (1 feature)', '#9cc3ef'),
+              'image_only': ('image only (23)', '#2a78d6'),
+              'location_only': ('location only (12)', '#eb6834'),
+              REFERENCE: ('image + location (35)', '#1baf7a')}
+
+
+def groups_plot(metrics: pd.DataFrame, path: str, metric: str = 'DICE'):
+    """The slide picture of the groups experiment: absolute Dice (or HD95) per structure and feature set.
+
+    The effects here are large (0.05 to 0.8 Dice), so the absolute value is the honest picture; a difference plot
+    squeezes the seeds and the relevance band to invisible dots. One panel per structure, one bar per feature set
+    (bar = mean over subjects and seeds, value printed on top), small dots = the 10 test subjects (seed-averaged),
+    so the spread between patients is visible. Same y axis in every panel: the structures are comparable.
+    """
+    plt = _plt()
+    view = metrics[metrics.metric == metric]
+    per_subject = view.groupby(['name', 'label', 'subject'])['value'].mean()   # seeds averaged per subject
+    sets = [n for n in GROUP_SETS if n in set(view.name)]
+    labels = [label for label in LABELS if label in set(view.label)]
+    fig, axes = plt.subplots(1, len(labels), figsize=(2.7 * len(labels) + 0.6, 3.9), sharey=True)
+    rng = np.random.default_rng(0)                                   # horizontal jitter of the subject dots
+    for ax, label in zip(np.atleast_1d(axes), labels):
+        for x, name in enumerate(sets):
+            values = per_subject.loc[(name, label)].values
+            mean = values.mean()
+            ax.bar(x, mean, width=0.72, color=GROUP_SETS[name][1], zorder=2)
+            ax.scatter(x + rng.uniform(-0.18, 0.18, len(values)), values, s=9, color='#2b2f36', alpha=0.55,
+                       lw=0, zorder=3)
+            text = f'{mean:.2f}' if metric == 'DICE' else f'{mean:.1f}'
+            ax.text(x, max(mean, values.max()) + (0.02 if metric == 'DICE' else 0.4), text, ha='center',
+                    va='bottom', fontsize=8.5, color='#2b2f36')
+        ax.set_title(label, fontsize=11)
+        ax.set_xticks(range(len(sets)))
+        ax.set_xticklabels([''] * len(sets))
+        ax.grid(axis='y', color='#e6e8ec', lw=0.8, zorder=0)
+        ax.spines[['top', 'right', 'left']].set_visible(False)
+        ax.tick_params(axis='y', length=0)
+    first = np.atleast_1d(axes)[0]
+    if metric == 'DICE':
+        first.set_ylim(0, 1.0)
+    first.set_ylabel('Dice' if metric == 'DICE' else 'HD95 (mm)')
+    handles = [plt.Rectangle((0, 0), 1, 1, color=GROUP_SETS[n][1]) for n in sets]
+    fig.legend(handles, [GROUP_SETS[n][0] for n in sets], loc='lower center', ncol=len(sets),
+               frameon=False, fontsize=9.5)
+    fig.suptitle('Which kind of information does each structure need?  bar = mean, dots = the 10 test subjects',
+                 fontsize=11.5, x=0.01, ha='left')
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.savefig(path, dpi=200, facecolor='white')
+    plt.close(fig)
+    print('plot:', path)
+
+
 def report_groups(out_dir: str, args):
-    metrics, _ = report_effects(out_dir, args, REFERENCE, 'Image vs location features')
-    # the slide picture: structures x feature sets, cell = mean Dice
-    heatmap(mean_table(metrics).T, os.path.join(out_dir, 'groups_dice.png'),
-            'Mean Dice per structure and feature set', cbar_label='Dice')
+    # tables only: the differences are far too large for the effect plot (see groups_plot)
+    metrics, _ = report_effects(out_dir, args, REFERENCE, 'Image vs location features', plot=False)
+    for name in ('effects_dice.png', 'effects_hd95.png'):            # the old difference plots would mislead
+        if os.path.exists(os.path.join(out_dir, name)):
+            os.remove(os.path.join(out_dir, name))
+    groups_plot(metrics, os.path.join(out_dir, 'groups_dice.png'), 'DICE')
+    groups_plot(metrics, os.path.join(out_dir, 'groups_hd95.png'), 'HDRFDST95')
 
 
 def ablation_sets(data: Data) -> dict:
@@ -529,10 +729,12 @@ def plan_ablation(data: Data, args) -> list:
 
 
 def report_ablation(out_dir: str, args):
-    _, table = report_effects(out_dir, args, REFERENCE, 'Drop one family from the 35 features')
+    _, table = report_effects(out_dir, args, REFERENCE,
+                              'Remove one feature family from the 35 features and retrain',
+                              drop_negligible=True)
     dice = table[table.metric == 'DICE'].pivot(index='run', columns='label', values='mean_diff')
     heatmap(dice[[c for c in LABELS if c in dice.columns]], os.path.join(out_dir, 'ablation_dice.png'),
-            'Dice change when a family is removed (red = worse)', fmt='{:+.3f}', diverging=True,
+            'Dice change when a family is removed', fmt='{:+.3f}', diverging=True,
             cbar_label='Dice difference')
 
 
@@ -685,7 +887,7 @@ EXPERIMENTS = {
     # name: (plan, report)
     'check': (plan_check, report_check),
     'subsets': (plan_subsets, report_subsets),
-    'noise': (plan_noise, lambda o, a: report_effects(o, a, 'extended', 'Pure-noise columns added to extended')),
+    'noise': (plan_noise, lambda o, a: report_effects(o, a, REFERENCE, 'Add pure-noise columns to all 35 features')),
     'groups': (plan_groups, report_groups),
     'ablation': (plan_ablation, report_ablation),
 }
@@ -731,7 +933,7 @@ if __name__ == '__main__':
     parser.add_argument('--k', type=int, nargs='+', default=[3, 6, 12, 18, 23], help='subsets: image features')
     parser.add_argument('--draws', type=int, default=5, help='subsets: random subsets per k')
     # noise
-    parser.add_argument('--n_noise', type=int, nargs='+', default=[29, 100], help='noise: numbers of noise columns')
+    parser.add_argument('--n_noise', type=int, nargs='+', default=[35, 100], help='noise: numbers of noise columns')
     # permutation
     parser.add_argument('--repeats', type=int, default=3, help='permutation: shuffles per group')
     parser.add_argument('--fraction', type=float, default=0.2, help='permutation: fraction of brain voxels used')
