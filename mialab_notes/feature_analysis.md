@@ -8,6 +8,8 @@
 | Is a feature better than chance? | `boruta` | Boruta: compares every feature with shuffled copies ("shadow features") |
 | Which features are redundant? | `correlation` | correlation matrix, groups of strongly correlated features, a suggestion which to drop |
 
+Information gain per feature, family and tree depth, the grouped (family) permutation importance and the analysis of the HD95 outliers are in [information_gain.md](information_gain.md).
+
 Every command prints its numbers in the terminal and writes them as `.csv`. With `--plot` it also saves simple plots (`.png`). `summary` puts everything computed so far into one table.
 
 ---
