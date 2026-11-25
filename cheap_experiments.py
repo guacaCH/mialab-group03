@@ -17,6 +17,8 @@ The experiments (each one is a subcommand, writes to results/cheap/<subcommand>/
     python cheap_experiments.py ablation              # exp. 4: extended_plus without one family at a time (and without T2)
     python cheap_experiments.py permutation           # grouped permutation importance of the 35-feature forest
     python cheap_experiments.py mi                    # mutual information of every feature with every structure
+    python cheap_experiments.py perturb               # H3: all35 forests on perturbed test images (needs
+                                                      # extract_features.py --noise/--blur/--bias first)
 
     python cheap_experiments.py report <subcommand>   # only the report (tables + plot) of what is already finished
 
@@ -883,6 +885,198 @@ def report_mi(out_dir: str, args):
 # =================================================================================================================
 # Command line
 # =================================================================================================================
+# =================================================================================================================
+# H3: image perturbations. The 35-feature forests (trained on CLEAN images) segment perturbed test images.
+# =================================================================================================================
+PERTURBATION_TYPES = {'noise': 'Gaussian noise (std, brain std = 1)', 'blur': 'Gaussian blur (sigma, mm)',
+                      'bias': 'bias field (± fraction)'}
+
+
+def perturbation_levels(features_dir: str) -> list:
+    """The perturbed test sets that extract_features.py wrote: folders noise_<v>, blur_<v>, bias_<v>, sorted by type
+    and strength. Returns a list of (name, type, value), starting with ('clean', None, 0) = the normal test files."""
+    levels = []
+    for path in glob.glob(os.path.join(features_dir, '*_*')):
+        kind, _, value = os.path.basename(path).partition('_')
+        if kind in PERTURBATION_TYPES and glob.glob(os.path.join(path, 'test_*.npz')):
+            levels.append((os.path.basename(path), kind, float(value)))
+    order = list(PERTURBATION_TYPES)
+    return [('clean', None, 0.0)] + sorted(levels, key=lambda level: (order.index(level[1]), level[2]))
+
+
+def load_tests(folder: str, names: list) -> dict:
+    """The test subjects of one (perturbed) test set, like Data.tests (columns checked against the training files)."""
+    tests = {}
+    for path in sorted(glob.glob(os.path.join(folder, 'test_*.npz'))):
+        d = np.load(path)
+        if [str(n) for n in d['feature_names']] != names:
+            raise SystemExit(f'{path} has other columns than the training files')
+        tests[os.path.basename(path)[len('test_'):-len('.npz')]] = {
+            'X': d['X'].astype(np.float32), 'y': d['y'].astype(np.uint8), 'brain_index': d['brain_index']}
+    return tests
+
+
+def perturb(data: Data, args, out_dir: str):
+    """Segments every perturbed test set with the all35 forests of every seed, and measures which feature families
+    the forest of the first seed still relies on there (grouped permutation importance, as in permutation()).
+
+    Design (see mialab_notes/findings_hypotheses.md, H3): the forests are trained ONCE on the clean training voxels
+    and never retrained; only the test images change. So a Dice drop means "the information the forest learned to
+    use is no longer there", and a change in a family's permutation importance shows which family's information
+    depends on the destroyed image property (noise: fine detail, blur: small scales, bias: absolute intensity).
+
+    Writes (resumable, finished levels are skipped):
+        metrics.csv      level, type, value, seed, subject, label, metric (DICE / HDRFDST95), value
+        importance.csv   level, type, value, group, repeat, subject, label, dice (on a voxel sample; group 'none' =
+                         not permuted, the reference for the drop)
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    metrics_path, importance_path = os.path.join(out_dir, 'metrics.csv'), os.path.join(out_dir, 'importance.csv')
+    done = set(pd.read_csv(metrics_path)['level']) if os.path.exists(metrics_path) else set()
+    levels = [lv for lv in perturbation_levels(args.features_dir) if lv[0] not in done]
+    print(f'{len(levels)} perturbation levels to run: {", ".join(lv[0] for lv in levels)}')
+    if not levels:
+        return
+
+    columns = data.all_features
+    idx = [data.names.index(c) for c in columns]
+    forests = {}
+    for seed in data.trains:                                          # one 35-feature forest per seed, fitted once
+        print(f'fitting the 35-feature forest of seed {seed}')
+        forests[seed] = sk_ensemble.RandomForestClassifier(random_state=seed, **FOREST).fit(
+            data.trains[seed]['X'][:, idx], data.trains[seed]['y'])
+    # the permutation groups: every family, plus T2 and the two main groups (as in permutation())
+    groups = {f: [i for i, c in enumerate(columns) if data.family[c] == f]
+              for f in dict.fromkeys(data.family[c] for c in columns)}
+    groups['T2 (all)'] = [i for i, c in enumerate(columns) if data.modality[c] == 'T2' or 'T2' in c]
+    groups['image (all)'] = [i for i, c in enumerate(columns) if c in data.groups['image']]
+    groups['location (all)'] = [i for i, c in enumerate(columns) if c in data.groups['location']]
+    first = next(iter(forests))
+
+    for name, kind, value in levels:
+        t0 = timeit.default_timer()
+        tests = data.tests if name == 'clean' else load_tests(os.path.join(args.features_dir, name), data.names)
+        tag = {'level': name, 'type': kind or 'clean', 'strength': value}
+        # 1) Dice and HD95 of every seed's forest on every subject
+        rows = []
+        for seed, forest in forests.items():
+            evaluator = putil.init_evaluator()
+            for subject, test in tests.items():
+                prediction = forest.predict(test['X'][:, idx]).astype(np.uint8)
+                evaluator.evaluate(to_image(prediction, test['brain_index']), data.ground_truths[subject], subject)
+            rows += [dict(tag, seed=seed, subject=r.id_, label=r.label, metric=r.metric, value=r.value)
+                     for r in evaluator.results]
+        # 2) grouped permutation importance of the first seed's forest on a voxel sample of this test set
+        rng = np.random.default_rng(7)                                # the same sample rule for every level
+        importance = []
+        for i, (subject, test) in enumerate(tests.items()):
+            sample = np.sort(rng.choice(len(test['y']), int(args.fraction * len(test['y'])), replace=False))
+            x0, y = test['X'][sample][:, idx], test['y'][sample]
+            for group in ['none'] + list(groups):
+                for repeat in range(1 if group == 'none' else args.repeats):
+                    x = x0.copy()
+                    if group != 'none':
+                        order = np.random.default_rng([list(groups).index(group), repeat, i]).permutation(len(x))
+                        x[:, groups[group]] = x0[order][:, groups[group]]
+                    dice = dice_per_label(forests[first].predict(x), y)
+                    importance += [dict(tag, group=group, repeat=repeat, subject=subject, label=k, dice=v)
+                                   for k, v in dice.items()]
+        # append only when the whole level is finished, so a stopped run never leaves half a level behind
+        pd.DataFrame(importance).to_csv(importance_path, mode='a', index=False,
+                                        header=not os.path.exists(importance_path))
+        pd.DataFrame(rows).to_csv(metrics_path, mode='a', index=False, header=not os.path.exists(metrics_path))
+        dice = pd.DataFrame(rows).query('metric == "DICE"').groupby('label')['value'].mean()
+        print(f'{name}: ' + ', '.join(f'{label} {dice[label]:.3f}' for label in LABELS)
+              + f'  ({timeit.default_timer() - t0:.0f} s)')
+        if name != 'clean':
+            del tests
+
+
+def report_perturb(out_dir: str, args):
+    """Tables and the two H3 plots.
+
+    perturb_dice.png:        Dice per structure against the perturbation strength, one panel per perturbation type
+                             (strength 0 = clean); band = 95 % bootstrap CI over subjects and seeds.
+    perturb_importance.png:  Dice drop when a family is shuffled, per perturbation level (columns), for the tissue
+                             (WM, GM) and the deep structures (thalamus, hippocampus, amygdala). A family whose drop
+                             shrinks under a perturbation carries information that the perturbation destroys.
+    """
+    plt = _plt()
+    metrics = load_metrics(out_dir)
+    dice = metrics[metrics.metric == 'DICE']
+    colors = {'WhiteMatter': '#8a6d1f', 'GreyMatter': '#5b5fa8', 'Thalamus': '#2f7a3e', 'Hippocampus': '#c0562a',
+              'Amygdala': '#b0336c'}                                 # the structure colours of report_feature_count.py
+
+    # --- Dice vs strength ---------------------------------------------------------------------------------------
+    clean = dice[dice.level == 'clean']
+    kinds = [k for k in PERTURBATION_TYPES if k in set(dice.type)]
+    table_rows = []
+    fig, axes = plt.subplots(1, len(kinds), figsize=(4.2 * len(kinds), 4.0), sharey=True)
+    for ax, kind in zip(np.atleast_1d(axes), kinds):
+        part = pd.concat([clean.assign(type=kind), dice[dice.type == kind]])
+        for label in LABELS:
+            stats = []
+            for strength, g in part[part.label == label].groupby('strength'):
+                table = g.pivot_table(index='subject', columns='seed', values='value')   # subjects x seeds
+                mean, low, high = bootstrap_ci(table.values)
+                stats.append((strength, mean, low, high))
+                table_rows.append({'type': kind, 'strength': strength, 'label': label, 'mean': mean,
+                                   'ci_low': low, 'ci_high': high})
+            s, m, lo, hi = map(np.array, zip(*stats))
+            ax.fill_between(s, lo, hi, color=colors[label], alpha=0.15, lw=0)
+            ax.plot(s, m, marker='o', ms=5, lw=2, color=colors[label], label=label)
+        ax.set_xticks(s)                                              # only the tested strengths
+        ax.set_xticklabels([f'{v:g}' for v in s])
+        ax.set_title(PERTURBATION_TYPES[kind], fontsize=10)
+        ax.set_xlabel('strength (0 = clean)')
+        ax.grid(axis='y', color='#eceef2')
+        ax.spines[['top', 'right']].set_visible(False)
+    np.atleast_1d(axes)[0].set_ylabel('Dice')
+    handles, labels = np.atleast_1d(axes)[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=5, frameon=False, fontsize=9)
+    fig.suptitle('Forests trained on clean images, tested on perturbed images (band = 95 % CI over subjects and '
+                 'seeds)', fontsize=11, x=0.01, ha='left')
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.savefig(os.path.join(out_dir, 'perturb_dice.png'), dpi=200, facecolor='white')
+    plt.close(fig)
+    summary = pd.DataFrame(table_rows)
+    summary.to_csv(os.path.join(out_dir, 'perturb_dice.csv'), index=False)
+    print('\nDice per perturbation (mean over subjects and seeds)')
+    print(summary.pivot_table(index=['type', 'strength'], columns='label', values='mean')[LABELS].round(3).to_string())
+
+    # --- permutation importance per level -----------------------------------------------------------------------
+    imp = pd.read_csv(os.path.join(out_dir, 'importance.csv'))
+    base = imp[imp.group == 'none'].groupby(['level', 'subject', 'label'])['dice'].mean()
+    perm = imp[imp.group != 'none'].groupby(['level', 'group', 'subject', 'label'])['dice'].mean()
+    drop = (base - perm).groupby(['level', 'group', 'label']).mean().reset_index(name='drop')   # mean over subjects
+    drop.to_csv(os.path.join(out_dir, 'perturb_importance.csv'), index=False)
+    level_order = [lv for lv in ['clean'] + [n for n, _, _ in perturbation_levels(args.features_dir)[1:]]
+                   if lv in set(drop.level)]
+    parts = {'WM and GM': ['WhiteMatter', 'GreyMatter'], 'thalamus, hippocampus, amygdala':
+             ['Thalamus', 'Hippocampus', 'Amygdala']}
+    fig, axes = plt.subplots(1, 2, figsize=(1.0 * len(level_order) * 2 + 4, 5.2), sharey=True)
+    for ax, (title, labels) in zip(axes, parts.items()):
+        view = drop[drop.label.isin(labels)].groupby(['group', 'level'])['drop'].mean().unstack('level')
+        view = view[level_order].sort_values('clean', ascending=False)
+        limit = np.nanmax(np.abs(view.values)) or 1
+        image = ax.imshow(view.values, cmap='RdBu_r', vmin=-limit, vmax=limit, aspect='auto')
+        ax.set_xticks(range(len(level_order)))
+        ax.set_xticklabels([lv.replace('_', ' ') for lv in level_order], rotation=45, ha='right', fontsize=8.5)
+        ax.set_yticks(range(len(view)))
+        ax.set_yticklabels(view.index, fontsize=9)
+        for (r, c), v in np.ndenumerate(view.values):
+            ax.text(c, r, f'{v:.2f}', ha='center', va='center', fontsize=7,
+                    color='white' if abs(v) > 0.6 * limit else '#2b2f36')
+        ax.set_title(f'Dice drop when shuffled: {title}', fontsize=10)
+        fig.colorbar(image, ax=ax, fraction=0.04, pad=0.02)
+    fig.suptitle('Which feature family does the forest still rely on when the image is perturbed?', fontsize=11,
+                 x=0.01, ha='left')
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, 'perturb_importance.png'), dpi=200, facecolor='white')
+    plt.close(fig)
+    print('plots:', os.path.join(out_dir, 'perturb_dice.png'), os.path.join(out_dir, 'perturb_importance.png'))
+
+
 EXPERIMENTS = {
     # name: (plan, report)
     'check': (plan_check, report_check),
@@ -891,7 +1085,8 @@ EXPERIMENTS = {
     'groups': (plan_groups, report_groups),
     'ablation': (plan_ablation, report_ablation),
 }
-OTHER = {'permutation': (permutation, report_permutation), 'mi': (mutual_information, report_mi)}
+OTHER = {'permutation': (permutation, report_permutation), 'mi': (mutual_information, report_mi),
+         'perturb': (perturb, report_perturb)}
 
 
 def main(args):
@@ -902,7 +1097,8 @@ def main(args):
         (EXPERIMENTS.get(name) or OTHER[name])[1](out_dir, args)
         return
     # permutation and mi analyse one forest / one sample: only the first seed is loaded for them
-    seeds = args.seeds if args.experiment in EXPERIMENTS else args.seeds[:1]
+    # (perturb uses every seed for the Dice and the first seed's forest for the permutation importance)
+    seeds = args.seeds if args.experiment in EXPERIMENTS or args.experiment == 'perturb' else args.seeds[:1]
     data = Data(args.features_dir, args.data_atlas_dir, seeds)
     if args.experiment in EXPERIMENTS:
         plan, report = EXPERIMENTS[args.experiment]

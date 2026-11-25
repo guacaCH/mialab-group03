@@ -78,8 +78,8 @@ class FeatureExtractor:
         spec, exclude = fpool.feature_spec_from_kwargs(kwargs)
         self.columns = fpool.select_columns(spec, exclude)
         cache_dir = kwargs.get('feature_cache_dir', None)
-        # no cache for noisy images: the cache does not know the noise level
-        use_cache = cache_dir and not kwargs.get('noise_std', 0)
+        # no cache for perturbed images (noise, blur, bias field): the cache does not know the perturbation
+        use_cache = cache_dir and not is_perturbed(kwargs)
         self.cache = fpool.FeatureCache(cache_dir, kwargs) if use_cache else None
 
     def execute(self) -> structure.BrainImage:
@@ -236,10 +236,12 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
                                                                 reference=atlas_t1, reference_mask=atlas_mask),
                             len(pipeline_t1.filters) - 1)
 
-    # execute pipeline on the T1w image
-    img.images[structure.BrainImageTypes.T1w] = pipeline_t1.execute(img.images[structure.BrainImageTypes.T1w])
+    # execute pipeline on the T1w image (bias field: on the raw image, before; noise and blur: on the result, after)
+    t1 = _bias_field(img.images[structure.BrainImageTypes.T1w], **kwargs)
+    img.images[structure.BrainImageTypes.T1w] = pipeline_t1.execute(t1)
     img.images[structure.BrainImageTypes.T1w] = _add_noise(img.images[structure.BrainImageTypes.T1w],
-                                                           img.images[structure.BrainImageTypes.BrainMask], **kwargs)
+                                                           img.images[structure.BrainImageTypes.BrainMask],
+                                                           noise_seed=42, **kwargs)
 
     # construct pipeline for T2w image pre-processing
     pipeline_t2 = fltr.FilterPipeline()
@@ -260,9 +262,12 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
     
 
     # execute pipeline on the T2w image
-    img.images[structure.BrainImageTypes.T2w] = pipeline_t2.execute(img.images[structure.BrainImageTypes.T2w])
+    t2 = _bias_field(img.images[structure.BrainImageTypes.T2w], **kwargs)
+    img.images[structure.BrainImageTypes.T2w] = pipeline_t2.execute(t2)
+    # another noise seed than T1: the noise of the two images must be independent, as in a real scan
     img.images[structure.BrainImageTypes.T2w] = _add_noise(img.images[structure.BrainImageTypes.T2w],
-                                                           img.images[structure.BrainImageTypes.BrainMask], **kwargs)
+                                                           img.images[structure.BrainImageTypes.BrainMask],
+                                                           noise_seed=43, **kwargs)
 
     # construct pipeline for ground truth image pre-processing
     pipeline_gt = fltr.FilterPipeline()
@@ -288,18 +293,65 @@ def pre_process(id_: str, paths: dict, **kwargs) -> structure.BrainImage:
     return img
 
 
-def _add_noise(image: sitk.Image, brain_mask: sitk.Image, **kwargs) -> sitk.Image:
-    """Optional perturbation for the robustness experiment: Gaussian noise on the pre-processed image.
+# =====================================================================================================================
+# Image perturbations for the robustness experiment (H3: what does the information of a feature depend on?)
+# Only the TEST images are perturbed (extract_features.py --noise / --blur / --bias); the forest is trained on clean
+# images. Each perturbation destroys one image property:
+#   noise_std  (after normalization): Gaussian noise, in units of the brain's intensity std -> fine detail, edges
+#   blur_sigma (after normalization): Gaussian smoothing, sigma in mm                       -> small scales, edges
+#   bias_level (on the RAW image):    smooth multiplicative intensity drift of +-bias_level  -> absolute intensity
+# =====================================================================================================================
+def is_perturbed(kwargs: dict) -> bool:
+    """True if any perturbation is switched on (then the feature cache must not be used)."""
+    return any(kwargs.get(key, 0) for key in ('noise_std', 'blur_sigma', 'bias_level'))
 
-    After z-score normalization, ``noise_std`` is in units of the brain's intensity standard deviation.
+
+def _add_noise(image: sitk.Image, brain_mask: sitk.Image, noise_seed: int = 42, **kwargs) -> sitk.Image:
+    """Optional perturbations on the pre-processed (registered, skull-stripped, z-scored) image: noise, then blur.
+
+    noise_std:  standard deviation of additive Gaussian noise. After z-score normalization the brain has std 1, so
+                0.2 = noise with 20 % of the brain's intensity spread. noise_seed makes it reproducible (T1 and T2 use
+                different seeds, so their noise is independent).
+    blur_sigma: sigma (mm) of a Gaussian blur, e.g. 1 or 2. Simulates a lower resolution / more partial volume.
+    After either, the image is masked again, so the background outside the brain stays 0 like in the clean images.
     """
     noise_std = kwargs.get('noise_std', 0)
-    if noise_std <= 0:
+    blur_sigma = kwargs.get('blur_sigma', 0)
+    if noise_std <= 0 and blur_sigma <= 0:
         return image
-    noisy = sitk.AdditiveGaussianNoise(image, noise_std, 0.0, 42)
+    if noise_std > 0:
+        image = sitk.AdditiveGaussianNoise(image, noise_std, 0.0, noise_seed)
+    if blur_sigma > 0:
+        image = sitk.SmoothingRecursiveGaussian(image, blur_sigma)
     if kwargs.get('skullstrip_pre', False):
-        noisy = sitk.Mask(noisy, sitk.Cast(brain_mask > 0, sitk.sitkUInt8))
-    return noisy
+        image = sitk.Mask(image, sitk.Cast(brain_mask > 0, sitk.sitkUInt8))
+    return image
+
+
+def _bias_field(image: sitk.Image, **kwargs) -> sitk.Image:
+    """Optional perturbation on the RAW image (before registration and normalization): a smooth bias field.
+
+    MRI bias fields are slow, multiplicative intensity drifts across the head (coil sensitivity). We simulate the
+    simplest one: a linear ramp along the diagonal of the image (left-right + front-back + bottom-top), scaled so
+    that it goes from -1 to +1 across the head, and multiply the image by 1 + bias_level * ramp.
+    Example: bias_level = 0.2 -> one corner of the head is 20 % darker, the opposite one 20 % brighter, the middle
+    unchanged. The z-score normalization later removes the global scale but NOT this spatial drift, exactly like a
+    real bias field. Features that use absolute intensity are hit; local contrast (gradients, local std, LoG) hardly
+    changes, because the field is almost constant within a few mm.
+    """
+    level = kwargs.get('bias_level', 0)
+    if level <= 0:
+        return image
+    array = sitk.GetArrayFromImage(image).astype(np.float32)
+    z, y, x = np.meshgrid(*[np.linspace(-1, 1, n, dtype=np.float32) for n in array.shape], indexing='ij')
+    ramp = (x + y + z) / 3
+    positive = array[array > 0]
+    head = array > np.percentile(positive, 5) if positive.size else np.ones(array.shape, bool)
+    low, high = ramp[head].min(), ramp[head].max()
+    ramp = 2 * (ramp - low) / (high - low) - 1                       # -1 .. +1 across the head
+    biased = sitk.GetImageFromArray(array * (1 + level * ramp))
+    biased.CopyInformation(image)
+    return biased
 
 
 def post_process(img: structure.BrainImage, segmentation: sitk.Image, probability: sitk.Image,

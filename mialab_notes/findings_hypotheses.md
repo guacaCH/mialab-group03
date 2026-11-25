@@ -106,24 +106,63 @@ State of 24.11.2026. All numbers come from `cheap_experiments.py` (reference: th
   only *where* a voxel is tells them apart.
 - The flip maps show the same picture in image space.
 
-**H3 (what the information depends on): partly supported, the weakest part so far.**
+**H3 (what the information depends on): supported for scale/edges, weak for modality.**
 - Modality: T2 matters only for the Amygdala (−0.009). Everywhere else T1 and T2 are redundant.
 - Scale (smoothing, LoG, local statistics): each family alone is negligible. The multi-scale image features are
   interchangeable.
-- Missing: the image perturbation experiment (noise, blur, bias field on the test images,
-  `extract_features.py --noise`). That is the direct test of H3.
+- **Image perturbations** (`cheap_experiments.py perturb`, `results/cheap/perturb/`). The all35 forests are
+  trained on clean images (5 seeds) and tested on perturbed test images. Dice change against clean, 95 % CI over
+  subjects and seeds:
 
-**H4 (where features act): qualitatively supported, the measure needs work.**
-- The flip maps show image features acting along tissue borders (cortex) and location features acting in whole
-  regions (deep structures, brainstem).
-- The current border measure (6-neighbour label change) marks 60 % of all brain voxels as border, because the
-  cortex is thin. So "61 % of the image flips are on a border" says nothing yet.
-- Better: bin the flips by distance to the nearest label border (0, 1, 2, ≥ 3 mm) and compare with the base rate
-  per bin.
-- Already informative: only 26 % of the location flips are on a border, so location acts mainly *inside*
-  regions.
+| perturbation | WM | GM | Thal | Hippo | Amyg |
+|---|---|---|---|---|---|
+| noise, std 0.5 (brain std = 1) | −0.028 | −0.018 | −0.001 | −0.011 | +0.006 |
+| blur, σ = 1 mm | +0.006 | −0.047 | −0.006 | −0.034 | −0.018 |
+| blur, σ = 2 mm | −0.022 | **−0.094** | −0.014 | **−0.065** | −0.042 |
+| bias field ±20 % | −0.005 | −0.008 | −0.002 | −0.009 | −0.004 |
+
+- **What the image information depends on: sharp borders, not absolute intensity.**
+  - Blur, which destroys borders and small scales, is the most damaging perturbation. It hits the thin cortex (GM)
+    and the hippocampus borders hardest.
+  - A ±20 % bias field, which destroys absolute intensity, is almost harmless. The z-score normalization and the
+    local features (gradients, LoG, local statistics) only use relative, local contrast.
+  - Noise hurts WM and GM moderately. The smoothed features average it out.
+  - This matches H4: image features act at the borders (border profile), so whatever blurs the borders removes
+    their information.
+- **The location-driven structures are robust.** Thalamus and Amygdala change by ≤ 0.04 even at σ = 2 mm, and the
+  Amygdala does not suffer from noise at all. Their information comes from the atlas, which no image perturbation
+  touches.
+- Permutation importance per family on the perturbed sets (`perturb_importance.png`) stays dominated by location
+  (Dice drop 0.33–0.40 for WM/GM, 0.64–0.68 for the deep structures). Under strong noise, the forest leans slightly
+  more on the prior (deep structures: prior 0.02 → 0.06, prior distances 0.34 → 0.38). The single image families
+  are each too redundant to show a shift (each ≤ 0.03).
+- Open: a direct test of "smoothed features protect against noise / small-scale features suffer under blur".
+  Evaluate the ablation forests (without smoothing, without LoG, ...) on noise 0.5 and blur 2 mm. That needs only
+  forests and predictions (about 30 min with 3 seeds), no new features.
+
+**H4 (where features act): supported, measured with the base rate removed.**
+- `flip_maps.py --borders` (`results/flipmaps/drop/border_profile.png`): the share of voxels that become wrong when
+  a group is removed, per distance to the nearest structure border. Dividing by the voxels in each bin removes the
+  base rate (60 % of the brain voxels lie on a border, because the cortex is thin).
+- On the voxels of the 5 structures (5 seeds):
+
+| removed | 0 mm | 1 mm | 2 mm | 3–4 mm | 5+ mm |
+|---|---|---|---|---|---|
+| image features | 24 % | 9 % | 0.9 % | 0.14 % | 0.01 % |
+| location features | 3.3 % | 3.4 % | 3.7 % | 4.1 % | 4.2 % |
+
+- **Image features act almost only at the borders.** Their effect drops about 2,000× from the border to 5 mm
+  inside.
+- **Location features act evenly across the whole structure.** They decide *which* structure a region is, not where
+  its edge runs.
+- In the unlabelled tissue inside the brain (brainstem etc.), the location features and the prior do the work deep
+  inside (83 % and 46 % of the 5+ mm voxels become wrong without them).
 
 ## Suggested slides
+
+(The H4 border profile and the H3 perturbation plot add two more: "image acts at borders, location everywhere"
+and "blur hurts, a bias field does not".)
+
 
 1. **"More features ≠ better":** the groups bar chart. 12 location features beat 23 image features on the small
    structures; T1 alone is about 0.
@@ -139,8 +178,8 @@ State of 24.11.2026. All numbers come from `cheap_experiments.py` (reference: th
 
 ## Open points
 
-- The image perturbation experiment (H3).
-- Distance-to-border bins for the flip maps (H4).
+- Ablation forests on perturbed images (direct test of which image family protects against noise / suffers
+  under blur).
 - Optional: correct the class probabilities for the sampling rates, and check how much the over-segmentation and
   the prior-distance effect shrink.
 - Boruta with 5 seeds, if H1 needs the "small all-relevant subset" claim.

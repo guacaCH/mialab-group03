@@ -360,7 +360,7 @@ def plot(out_dir: str, groups: list, positions: dict, vmax: float):
 # =================================================================================================================
 # distance bins in mm (1 voxel = 1 mm in atlas space): upper edges and labels. 0 = the voxel itself lies on a border
 # (a 6-neighbour has another label); 1 = next to it (also the diagonal neighbours, sqrt(2) and sqrt(3) mm), ...
-DISTANCE_BINS = [(0.5, '0'), (1.8, '1'), (2.5, '2'), (4.5, '3-4'), (np.inf, '≥5')]
+DISTANCE_BINS = [(0.5, '0'), (1.8, '1'), (2.5, '2'), (4.5, '3-4'), (np.inf, '5+')]
 
 
 def border_distance(labels: np.ndarray, spacing: tuple) -> np.ndarray:
@@ -377,79 +377,93 @@ def border_profile(data: dict, out_dir: str, cheap_dir: str, groups: list, seeds
 
     Why a RATE: 60 % of the brain voxels lie on a border (the cortex is thin), so "most flips are on a border" is true
     for any random set of voxels. Dividing by the number of voxels in the bin removes that base rate: a group that
-    acts at borders has a much higher rate at 0 mm than at >= 5 mm, a group that acts inside regions has a flat or
+    acts at borders has a much higher rate at 0 mm than at 5+ mm, a group that acts inside regions has a flat or
     rising profile.
-    Example: 1,000 harm flips among 500,000 border voxels = 0.2 %; 50 among 100,000 voxels at >= 5 mm = 0.05 %:
+    Example: 1,000 harm flips among 500,000 border voxels = 0.2 %; 50 among 100,000 voxels at 5+ mm = 0.05 %:
     removing the group hurts 4x more on the border than deep inside.
+
+    Split by the TRUE label of the voxel ('tissue'):
+        structures  = the 5 labelled structures (WM, GM, thalamus, hippocampus, amygdala)
+        background  = unlabelled tissue inside the brain mask (brainstem, cerebellum, CSF, ...); its interior is far
+                      from every structure border, so it dominates the 5+ mm bin and would hide the structures' profile
     Also written: the error rate of the reference all35 per bin (where the forest is wrong anyway).
     """
     shape = putil.atlas_t1.GetSize()[::-1]
     spacing = putil.atlas_t1.GetSpacing()[::-1]                    # numpy order z, y, x
     edges = [e for e, _ in DISTANCE_BINS]
     names = [n for _, n in DISTANCE_BINS]
+    cheap = cheap_dir if mode == 'drop' else None
+
+    def missing():
+        raise SystemExit('predictions missing: run flip_maps.py (without --borders) first')
+
     rows = []
-    no_compute = lambda: (_ for _ in ()).throw(SystemExit('predictions missing: run flip_maps.py first'))  # noqa
     for subject, test in data['tests'].items():
         gt = np.zeros(int(np.prod(shape)), np.uint8)
         gt[test['brain_index']] = test['y']
         distance = border_distance(gt.reshape(shape), spacing).ravel()[test['brain_index']]
         bin_of = np.searchsorted(edges, distance, side='left')     # index of the distance bin of every brain voxel
-        voxels = np.bincount(bin_of, minlength=len(edges))
         y = test['y']
+        tissues = {'structures': y > 0, 'background': y == 0}
         for seed in seeds:
-            ref = cached_predictions(out_dir, cheap_dir if mode == 'drop' else None, 'all35', seed, no_compute)[subject]
-            for b, name in enumerate(names):
-                rows.append({'group': 'all35 errors', 'subject': subject, 'seed': seed, 'bin': name,
-                             'voxels': voxels[b], 'count': int(np.sum((ref != y) & (bin_of == b)))})
-            for group in groups:
-                other = cached_predictions(out_dir, cheap_dir if mode == 'drop' else None, group, seed,
-                                           no_compute)[subject]
-                harm = (ref == y) & (other != y)
-                help_ = (ref != y) & (other == y)
+            ref = cached_predictions(out_dir, cheap, 'all35', seed, missing)[subject]
+            others = {g: cached_predictions(out_dir, cheap, g, seed, missing)[subject] for g in groups}
+            for tissue, in_tissue in tissues.items():
                 for b, name in enumerate(names):
-                    in_bin = bin_of == b
-                    rows.append({'group': group, 'subject': subject, 'seed': seed, 'bin': name, 'voxels': voxels[b],
-                                 'harm': int(np.sum(harm & in_bin)), 'help': int(np.sum(help_ & in_bin))})
-    table = pd.DataFrame(rows)
+                    cell = in_tissue & (bin_of == b)                 # voxels of this tissue in this distance bin
+                    base = {'subject': subject, 'seed': seed, 'tissue': tissue, 'bin': name, 'voxels': int(cell.sum())}
+                    rows.append(dict(base, group='all35 errors', errors=int(np.sum(cell & (ref != y)))))
+                    for group, other in others.items():
+                        rows.append(dict(base, group=group, harm=int(np.sum(cell & (ref == y) & (other != y))),
+                                         help=int(np.sum(cell & (ref != y) & (other == y)))))
+    table = pd.DataFrame(rows).fillna(0)
     # rate per bin: pooled over subjects and seeds (sum of flips / sum of voxels)
-    sums = table.groupby(['group', 'bin'], sort=False)[['voxels', 'harm', 'help', 'count']].sum()
+    sums = table.groupby(['tissue', 'group', 'bin'], sort=False)[['voxels', 'harm', 'help', 'errors']].sum()
     profile = pd.DataFrame({'voxels_per_case': sums.voxels / (len(seeds) * len(data['tests'])),
                             'harm_rate_%': 100 * sums.harm / sums.voxels, 'help_rate_%': 100 * sums.help / sums.voxels,
-                            'error_rate_%': 100 * sums['count'] / sums.voxels}).reset_index()
+                            'error_rate_%': 100 * sums.errors / sums.voxels}).reset_index()
     profile.to_csv(os.path.join(out_dir, 'border_profile.csv'), index=False)
-    print('\nFlip rate (%) per distance to the nearest structure border (mm)')
-    print(profile.pivot(index='group', columns='bin', values='harm_rate_%')[names].round(3).to_string())
+    for tissue in tissues:
+        view = profile[(profile.tissue == tissue) & (profile.group != 'all35 errors')]
+        print(f'\n{tissue}: correct -> wrong when the group is removed, % of the voxels per distance bin (mm)')
+        print(view.pivot(index='group', columns='bin', values='harm_rate_%')[names].round(2).to_string())
     return profile
 
 
 def plot_border_profile(profile: pd.DataFrame, out_dir: str, groups: list):
-    """Two panels: rate of 'needed' flips (harm) and of 'misled' flips (help) per distance bin, one line per group."""
+    """Two panels (labelled structures | unlabelled tissue inside the brain): rate of 'needed' flips per distance bin.
+
+    One line per group (correct -> wrong when the group is removed), dashed = error rate of all 35 features.
+    Log scale: the rates span 0.01 % to 50 %. The 'misled' rates (wrong -> correct) are in border_profile.csv.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     names = [n for _, n in DISTANCE_BINS]
     colors = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']   # categorical slots 1-6, fixed order
     x = np.arange(len(names))
-    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.3), sharey=True)
-    for ax, (column, title) in zip(axes, (('harm_rate_%', 'correct -> wrong when removed (features were needed)'),
-                                          ('help_rate_%', 'wrong -> correct when removed (features misled)'))):
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.4), sharey=True)
+    for ax, (tissue, title) in zip(axes, (('structures', 'voxels of the 5 structures'),
+                                          ('background', 'unlabelled tissue inside the brain'))):
+        view = profile[profile.tissue == tissue]
         for group, color in zip(groups, colors):
-            g = profile[profile.group == group].set_index('bin').reindex(names)
-            ax.plot(x, g[column], marker='o', ms=6, lw=2, color=color, label=f'remove {GROUP_TITLES.get(group, group)}')
-        ref = profile[profile.group == 'all35 errors'].set_index('bin').reindex(names)
-        ax.plot(x, ref['error_rate_%'], ls='--', lw=1.5, color='#5d6878', label='all 35 features: error rate')
+            g = view[view.group == group].set_index('bin').reindex(names)
+            ax.plot(x, g['harm_rate_%'].clip(lower=1e-3), marker='o', ms=6, lw=2, color=color,
+                    label=f'remove {GROUP_TITLES.get(group, group)}')
+        ref = view[view.group == 'all35 errors'].set_index('bin').reindex(names)
+        ax.plot(x, ref['error_rate_%'], ls='--', lw=1.5, color='#5d6878', label='errors with all 35 features')
         ax.set_yscale('log')
         ax.set_xticks(x)
         ax.set_xticklabels(names)
         ax.set_xlabel('distance to the nearest structure border (mm)')
         ax.set_title(title, fontsize=10)
-        ax.grid(axis='y', which='both', color='#eceef2', lw=0.7)
+        ax.grid(axis='y', which='major', color='#eceef2', lw=0.7)
         ax.spines[['top', 'right']].set_visible(False)
-    axes[0].set_ylabel('share of the brain voxels in the bin (%)')
+    axes[0].set_ylabel('correct -> wrong when removed\n(% of the voxels at this distance)')
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncol=4, frameon=False, fontsize=8.5)
-    fig.suptitle('Where do the feature groups act? Flip rate by distance to the structure borders', fontsize=11,
-                 x=0.01, ha='left')
+    fig.suptitle('Where do the feature groups act? Voxels that become wrong without a group, by distance to the '
+                 'structure borders', fontsize=11, x=0.01, ha='left')
     fig.tight_layout(rect=(0, 0.13, 1, 1))
     fig.savefig(os.path.join(out_dir, 'border_profile.png'), dpi=200, facecolor='white')
     plt.close(fig)

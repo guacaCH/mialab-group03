@@ -4,6 +4,8 @@ Run it once (and again after adding a feature):
     python extract_features.py
 For the robustness experiment, the test subjects with Gaussian noise added to the pre-processed T1w and T2w images:
     python extract_features.py --noise 0.1 0.2 0.5
+or blurred (sigma in mm) or with a bias field (+-10 / +-20 %), see _add_noise / _bias_field in pipeline_utilities.py:
+    python extract_features.py --features extended_plus --noise 0.1 0.3 0.5 --blur 1 2 --bias 0.1 0.2
 With a larger feature set of mialab/filtering/feature_pool.py, written to its own directory so the basic features
 stay as they are (also works with --noise):
     python extract_features.py --features extended        # multi-scale, local statistics, T1-T2, label prior
@@ -94,7 +96,8 @@ def save_test_subject(img: structure.BrainImage, path: str):
 
 
 def main(output_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_dir: str, noise: list, features: str,
-         seeds: list = DEFAULT_SEEDS, train_only: bool = False, feature_cache_dir: str = None):
+         seeds: list = DEFAULT_SEEDS, train_only: bool = False, feature_cache_dir: str = None,
+         blur: list = (), bias: list = ()):
     putil.load_atlas_images(data_atlas_dir)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -106,7 +109,11 @@ def main(output_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_di
         fpool.LABEL_PRIOR.clear()
         fpool.LABEL_PRIOR.update(fpool.build_label_prior(registered_ground_truths(crawl(data_train_dir))))
 
-    if not noise:
+    # perturbations of the TEST images only (H3): (output folder, pre-processing parameter, value)
+    perturbations = [(f'noise_{v}', 'noise_std', v) for v in noise] + \
+        [(f'blur_{v}', 'blur_sigma', v) for v in blur] + [(f'bias_{v}', 'bias_level', v) for v in bias]
+
+    if not perturbations:
         # training subjects: only the randomly sampled training voxels, once per seed.
         # np.random.seed(seed) right before pre_process_batch, exactly like run_experiment.py, so seed s gives the
         # same training voxels as results/<experiment>/seed_<s>/ (no feature uses np.random, the control has its own)
@@ -128,11 +135,13 @@ def main(output_dir: str, data_atlas_dir: str, data_train_dir: str, data_test_di
         return
 
     # test subjects: all voxels inside the brain mask, one file per subject to keep the memory low
-    for noise_std in noise or [0]:
-        out = output_dir if noise_std == 0 else os.path.join(output_dir, f'noise_{noise_std}')
+    # (no perturbation: the clean test files in output_dir itself)
+    for folder, key, value in perturbations or [('', None, 0)]:
+        out = os.path.join(output_dir, folder) if folder else output_dir
         os.makedirs(out, exist_ok=True)
+        extra = {key: value} if key else {}
         for id_, paths in crawl(data_test_dir).items():
-            img = putil.pre_process(id_, paths, **dict(params, training=False, noise_std=noise_std))
+            img = putil.pre_process(id_, paths, **dict(params, training=False, **extra))
             save_test_subject(img, os.path.join(out, f'test_{id_}.npz'))
 
     print('features written to', output_dir)
@@ -147,6 +156,10 @@ if __name__ == '__main__':
     parser.add_argument('--data_test_dir', default=os.path.normpath(os.path.join(script_dir, '../data/test/')))
     parser.add_argument('--noise', type=float, nargs='*', default=[],
                         help='noise standard deviations; only the test subjects are written')
+    parser.add_argument('--blur', type=float, nargs='*', default=[],
+                        help='Gaussian blur sigmas in mm (test subjects only), e.g. 1 2')
+    parser.add_argument('--bias', type=float, nargs='*', default=[],
+                        help='bias field strengths (test subjects only), e.g. 0.1 0.2 = +-10 %% / +-20 %%')
     parser.add_argument('--features', choices=FEATURE_SETS, default='baseline_t2', help='the feature set')
     parser.add_argument('--extended', action='store_true', help='short for --features extended')
     parser.add_argument('--seeds', type=int, nargs='+', default=DEFAULT_SEEDS,
@@ -160,4 +173,5 @@ if __name__ == '__main__':
     features = 'extended' if args.extended else args.features
     output_dir = args.output_dir or os.path.normpath(os.path.join(script_dir, FEATURE_SETS[features][1]))
     main(output_dir, args.data_atlas_dir, args.data_train_dir, args.data_test_dir, args.noise, features,
-         args.seeds, args.train_only, None if args.feature_cache.lower() == 'none' else args.feature_cache)
+         args.seeds, args.train_only, None if args.feature_cache.lower() == 'none' else args.feature_cache,
+         args.blur, args.bias)
