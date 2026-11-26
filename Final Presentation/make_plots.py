@@ -6,6 +6,10 @@ Usage (from the repository root):
 Plots 07 and the B_* backups are copies of existing figures from results/ (see talking_points.md).
 
 Writes to "Final Presentation/plots/". Every plot: large fonts, axis labels with units, legend outside the axes.
+
+Importance plots (02, 04) use brain voxels only: run brain_only_importance.py first. It drops the ~31 % of the
+training voxels that lie outside the brain mask and retrains the forest (see Marc's analysis). The versions made on
+all training voxels are in archive/plots_all_training_rows/.
 """
 import json
 import os
@@ -84,7 +88,7 @@ def plot_ladder(sm):
 
 # --- 2. cumulative information gain ---------------------------------------------------------------------------------
 def plot_cumulative(exp='extended_plus'):
-    d = pd.read_csv(os.path.join(RES, exp, 'analysis', 'seed_0', 'infogain', 'infogain_features.csv'))
+    d = pd.read_csv(os.path.join(RES, exp, 'analysis', 'seed_0', 'brain_only', 'infogain_features.csv'))
     d = d.sort_values('rank')
     x = np.arange(1, len(d) + 1)
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -106,7 +110,7 @@ def plot_cumulative(exp='extended_plus'):
     handles = [plt.Rectangle((0, 0), 1, 1, color=FAMILIES[f][1]) for f in present]
     ax.legend(handles, [FAMILIES[f][0] for f in present], title='feature family', loc='upper left',
               bbox_to_anchor=(1.08, 1.0), frameon=False)
-    ax.set_title(f'Information gain of the random forest, {exp} ({len(d)} features, seed 0)')
+    ax.set_title(f'Information gain of the random forest, {exp} ({len(d)} features), brain voxels only')
     save(fig, '02_infogain_cumulative_extended_plus.png')
 
 
@@ -149,7 +153,7 @@ def plot_cost(sm):
 
 # --- 4. SHAP by family and structure --------------------------------------------------------------------------------
 def plot_shap_family(exp='extended_plus'):
-    s = pd.read_csv(os.path.join(RES, exp, 'analysis', 'seed_0', 'shap_importance.csv')).set_index('feature')
+    s = pd.read_csv(os.path.join(RES, exp, 'analysis', 'seed_0', 'brain_only', 'shap_importance.csv')).set_index('feature')
     fam = pd.read_csv(os.path.join(RES, exp, 'analysis', 'seed_0', 'feature_summary.csv')).set_index('feature')['family']
     g = s[list(STRUCTURES)].groupby(fam).sum()
     share = g / g.sum() * 100                                    # % of the total |SHAP| of each structure
@@ -171,7 +175,7 @@ def plot_shap_family(exp='extended_plus'):
     ax.set_xlim(0, 100)
     # bracket the two groups: image appearance vs. location
     ax.legend(title='feature family', loc='upper left', bbox_to_anchor=(1.01, 1.0), frameon=False)
-    ax.set_title(f'SHAP: which kind of feature each structure relies on ({exp}, seed 0)')
+    ax.set_title(f'SHAP: which kind of feature each structure relies on ({exp}, brain voxels only)')
     save(fig, '04_shap_family_per_structure.png')
     return share
 
@@ -205,6 +209,9 @@ def plot_correlation_drop(sm):
                  fontsize=17)
     fig.text(0.5, -0.13, 'mean ± std over the 10 test subjects (each averaged over 3 seeds); '
              'paired Wilcoxon test, black = p < 0.05', ha='center', fontsize=11, color='grey')
+    fig.text(0.5, -0.24, 'Correlations were computed on all training voxels, incl. the 31 % outside the brain.\n'
+             'Inside the brain both dropped prior distances correlate less than 0.9 (r = 0.83 and −0.72) '
+             'and would have been kept.', ha='center', fontsize=12, color='#b0336c')
     save(fig, '05_correlation_drop.png')
 
 
@@ -244,13 +251,13 @@ def plot_flowchart():
     steps = [
         ('Intro\n \n ', 'Speaker 1 · 1:00', 'Task and pipeline\nHypothesis 6 →\nrefined hypothesis\nFeature pool:\n5 → 35 features', None, '#e8e8e8'),
         ('Part 1\nAmount vs.\ninformation', 'Speaker 1 · 2:45',
-         'Big gain only with the\nlabel prior, then a\nplateau at Dice 0.72\nTotal information is fixed:\n80 % in 16 of 35 features\nCost grows with\nevery feature',
+         'Big gain only with the\nlabel prior, then a\nplateau at Dice 0.72\nTotal information is fixed:\n80 % in 15 of 35 features\nCost grows with\nevery feature',
          'plots 01, 02, 03', '#dbe7f5'),
         ('Part 2\nWhich features,\nfor which structure', 'Speaker 2 · 2:45',
          'SHAP per structure\nWM/GM: intensity-type\nfeatures\nSmall structures: atlas\nprior + distance to region\nBoruta: all 35 features\nbeat random noise',
          'plot 04 (+ Boruta backup)', '#e3f0dc'),
         ('Part 3\nRedundant vs.\nunique information', 'Speaker 3 · 2:45',
-         'Drop 10 correlated features:\nsame Dice, half the cost …\n… but amygdala HD95\n4.0 → 5.7 mm\nDistance features remove\nstray voxels far away\n→ HD95 halves',
+         'Drop 10 correlated features:\nsame Dice, half the cost …\n… but amygdala HD95\n4.0 → 5.7 mm (correlation\nfrom outside-brain voxels)\nDistance features remove\nstray voxels far away\n→ HD95 halves',
          'plots 05, 06, 07', '#f7e6d5'),
         ('Conclusion\n \n ', 'Speaker 3 · 0:45', 'More features help only\nwhile they add new\ninformation; a small,\nnon-redundant set\nis enough\nLimits, next steps', None, '#e8e8e8'),
     ]
